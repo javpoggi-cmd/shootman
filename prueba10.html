@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: High Fidelity Testbed</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #020202;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 50px rgba(0, 0, 0, 1);
+            border: 1px solid #222;
+            background: #050505;
+            width: 1280px;
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        /* Efectos de post-procesado via CSS */
+        #scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), 
+                        linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+            background-size: 100% 3px, 3px 100%;
+            pointer-events: none;
+            z-index: 10;
+            opacity: 0.6;
+        }
+        /* Viñeta para oscurecer bordes y dar tono cinematográfico */
+        #vignette {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, rgba(0,0,0,0) 60%, rgba(0,0,0,0.8) 100%);
+            pointer-events: none;
+            z-index: 11;
+        }
+        #debug-ui {
+            position: absolute; top: 20px; left: 20px; 
+            color: #00ffaa; z-index: 20;
+            font-size: 12px;
+            letter-spacing: 1px;
+            text-shadow: 0 0 5px #00ffaa;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="testCanvas"></canvas>
+    <div id="scanlines"></div>
+    <div id="vignette"></div>
+    <div id="debug-ui">
+        <h3>SYSTEM: ONLINE</h3>
+        <p>RENDER: HIGH_FIDELITY</p>
+        <p>BIOME: NEO_INDUSTRIAL</p>
+        <p>WEATHER: HEAVY_STORM</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- CONFIGURACIÓN VISUAL MODERNA ---
+    const PALETTE = {
+        skyTop: '#020203',
+        skyBottom: '#0a0a0c',
+        fog: 'rgba(10, 12, 15, 0.6)',
+        neonBlue: '#00f3ff',
+        neonRed: '#ff2a2a',
+        neonOrange: '#ffae00',
+        metalDark: '#1a1a1d',
+        metalLight: '#4e4e50',
+        rain: 'rgba(170, 190, 210, 0.5)'
+    };
+
+    let thunderIntensity = 0; // Para controlar el flash de los rayos
+
+    // --- VARIABLES DE SIMULACIÓN ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+    
+    // --- SISTEMA DE LLUVIA ---
+    class RainSystem {
+        constructor(count) {
+            this.drops = [];
+            for(let i=0; i<count; i++) {
+                this.drops.push({
+                    x: Math.random() * GAME_WIDTH,
+                    y: Math.random() * GAME_HEIGHT,
+                    speed: 15 + Math.random() * 10,
+                    length: 10 + Math.random() * 20,
+                    z: Math.random() // 0 = lejos, 1 = cerca
+                });
+            }
+        }
+        updateAndDraw(ctx, camX) {
+            ctx.lineWidth = 1;
+            this.drops.forEach(d => {
+                // Movimiento
+                d.y += d.speed;
+                // Viento parallax
+                d.x -= (1 + d.z) * 2; 
+
+                // Reset
+                if (d.y > GAME_HEIGHT) {
+                    d.y = -d.length;
+                    d.x = Math.random() * (GAME_WIDTH + 200); // +200 para compensar el viento
+                }
+
+                // Dibujo
+                let opacity = 0.1 + (d.z * 0.4);
+                ctx.strokeStyle = `rgba(180, 200, 220, ${opacity})`;
+                ctx.beginPath();
+                ctx.moveTo(d.x, d.y);
+                ctx.lineTo(d.x - 2, d.y + d.length);
+                ctx.stroke();
+                
+                // Splash simple en el suelo
+                if (d.y > 540 && d.y < 550 && Math.random() > 0.9) {
+                    ctx.fillStyle = `rgba(200,200,255,${opacity})`;
+                    ctx.fillRect(d.x, d.y, 2, 1);
+                }
+            });
+        }
+    }
+    const rain = new RainSystem(400);
+
+    // --- CLASES DE JUEGO (Lógica Mock, Gráficos Nuevos) ---
+
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 24; this.height = 40; // Mantener hitbox
+            this.vx = 0; 
+            this.animTimer = 0;
+            this.facingRight = true;
+            this.state = 'wait';
+            this.stateTimer = 0;
+        }
+
+        update() {
+            this.animTimer++;
+            this.stateTimer++;
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { 
+                    this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left';
+                    this.stateTimer = 0;
+                }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3;
+                this.facingRight = true;
+                this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3;
+                this.facingRight = false;
+                this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+        }
+
+        draw(ctx) {
+            // DISEÑO: Soldado Táctico Futurista
+            ctx.save();
+            
+            // Inclinación al correr
+            let lean = 0; 
+            if (Math.abs(this.vx) > 1) lean = this.facingRight ? 5 : -5;
+            ctx.translate(this.x + this.width/2, this.y + this.height); // Pivot en los pies
+            ctx.rotate(lean * Math.PI / 180);
+            ctx.translate(-(this.x + this.width/2), -(this.y + this.height));
+
+            const centerX = this.x + this.width/2;
+            const facingDir = this.facingRight ? 1 : -1;
+            const breath = Math.sin(this.animTimer * 0.1) * 1;
+
+            // 1. Bufanda táctica (física simple)
+            ctx.fillStyle = '#b33';
+            let scarfX = centerX - (4 * facingDir);
+            let scarfFlow = Math.sin(this.animTimer * 0.4) * 3 - (this.vx * 2);
+            ctx.beginPath();
+            ctx.moveTo(scarfX, this.y + 12);
+            ctx.lineTo(scarfX - (10 * facingDir) - scarfFlow, this.y + 15 + breath);
+            ctx.lineTo(scarfX - (8 * facingDir) - scarfFlow, this.y + 22 + breath);
+            ctx.fill();
+
+            // 2. Piernas (Armadura oscura)
+            ctx.fillStyle = '#1a1a1d';
+            let legAnim = Math.sin(this.animTimer * 0.5) * 5;
+            if (Math.abs(this.vx) < 0.1) legAnim = 0;
+            
+            // Pierna atras
+            ctx.fillRect(centerX - 4 + legAnim, this.y + 22, 5, 18);
+            // Pierna adelante
+            ctx.fillStyle = '#2a2a2e';
+            ctx.fillRect(centerX - 4 - legAnim, this.y + 22, 5, 18);
+
+            // 3. Torso (Placas de armadura)
+            // Base
+            ctx.fillStyle = '#252528';
+            ctx.fillRect(this.x + 2, this.y + 10 + breath, 20, 18);
+            // Chaleco táctico
+            ctx.fillStyle = '#3a3a3e';
+            ctx.fillRect(this.x + 4, this.y + 12 + breath, 16, 8);
+            // Luz en la espalda (feedback de vida/energía)
+            ctx.fillStyle = PALETTE.neonBlue;
+            ctx.shadowColor = PALETTE.neonBlue; ctx.shadowBlur = 5;
+            ctx.fillRect(this.facingRight ? this.x + 2 : this.x + 18, this.y + 14 + breath, 2, 4);
+            ctx.shadowBlur = 0;
+
+            // 4. Cabeza (Casco completo)
+            ctx.fillStyle = '#151518'; // Casco oscuro
+            ctx.fillRect(this.x + 4, this.y + breath, 16, 14);
+            
+            // Visor Brillante
+            ctx.fillStyle = PALETTE.neonOrange;
+            ctx.shadowColor = PALETTE.neonOrange; ctx.shadowBlur = 10;
+            let visorX = this.facingRight ? this.x + 12 : this.x + 4;
+            ctx.fillRect(visorX, this.y + 4 + breath, 10, 3);
+            ctx.shadowBlur = 0;
+
+            // 5. Arma (Rifle pesado)
+            ctx.fillStyle = '#000';
+            let gunX = this.facingRight ? this.x + 8 : this.x - 10;
+            let gunY = this.y + 16 + breath;
+            ctx.fillRect(gunX, gunY, 26, 7); // Cuerpo arma
+            ctx.fillStyle = '#444';
+            ctx.fillRect(gunX + 2, gunY + 1, 22, 2); // Detalle superior
+            // Punta del cañon
+            if (Math.random() > 0.95) { // Brillo ocasional en el arma
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(this.facingRight ? gunX + 26 : gunX, gunY + 2, 1, 1);
+            }
+
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 30;
+            this.vx = 2; this.dir = 1; this.timer = 0;
+            this.state = 'walk'; this.startX = x; this.waitTimer = 0;
+        }
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) {
+                    this.state = 'wait'; this.waitTimer = 60;
+                }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) {
+                    this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk';
+                }
+            }
+        }
+        draw(ctx) {
+            // DISEÑO: Sentinel Bot (Mecha Bípedo)
+            let bob = Math.sin(this.timer * 0.3) * 2;
+            let centerX = this.x + this.width/2;
+            let centerY = this.y + this.height/2;
+
+            // Patas Mecánicas (Estilo pistón inverso)
+            ctx.strokeStyle = '#444'; ctx.lineWidth = 3;
+            ctx.beginPath();
+            // Pata Izq
+            let legOffset = Math.sin(this.timer * 0.3) * 8;
+            ctx.moveTo(centerX - 5, centerY + 5);
+            ctx.lineTo(centerX - 10 - legOffset, this.y + 30);
+            ctx.stroke();
+            // Pata Der
+            ctx.beginPath();
+            ctx.moveTo(centerX + 5, centerY + 5);
+            ctx.lineTo(centerX + 10 + legOffset, this.y + 30);
+            ctx.stroke();
+
+            // Cuerpo Principal (Caja blindada)
+            ctx.fillStyle = '#2a2a2a'; // Metal oscuro
+            ctx.fillRect(this.x, this.y + bob, this.width, this.height - 5);
+            
+            // Detalles metálicos (Greebles)
+            ctx.fillStyle = '#444'; 
+            ctx.fillRect(this.x + 2, this.y + bob + 2, 5, 5);
+            ctx.fillRect(this.x + 22, this.y + bob + 2, 5, 5);
+
+            // Ojo Escáner (Cylon style / Centinela)
+            ctx.shadowBlur = 15; 
+            ctx.shadowColor = PALETTE.neonRed;
+            ctx.fillStyle = '#500';
+            ctx.fillRect(this.x + 5, this.y + bob + 10, 20, 6); // Housing del ojo
+            
+            // Luz del ojo moviéndose
+            let eyePos = Math.sin(this.timer * 0.1) * 6;
+            ctx.fillStyle = '#ff0000';
+            ctx.fillRect(centerX + eyePos - 2, this.y + bob + 11, 4, 4);
+            
+            ctx.shadowBlur = 0; // Reset
+            
+            // Antena
+            ctx.fillStyle = '#888';
+            ctx.fillRect(this.x + 5, this.y + bob - 8, 2, 8);
+            if(this.timer % 60 < 10) { // Luz parpadeante antena
+                ctx.fillStyle = '#f00';
+                ctx.fillRect(this.x + 4, this.y + bob - 10, 4, 2);
+            }
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 20;
+            this.startX = x; this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1; 
+        }
+        draw(ctx) {
+            // DISEÑO: Hunter Drone
+            let hover = Math.sin(this.timer * 0.2) * 2;
+            let drawY = this.y + hover;
+
+            // Estela de motor
+            ctx.fillStyle = 'rgba(0, 243, 255, 0.3)';
+            ctx.beginPath();
+            ctx.moveTo(this.x + 5, drawY + 10);
+            ctx.lineTo(this.x - 15 + Math.random()*5, drawY + 15);
+            ctx.lineTo(this.x + 5, drawY + 18);
+            ctx.fill();
+
+            // Cuerpo aerodinámico
+            ctx.fillStyle = '#333';
+            ctx.beginPath();
+            ctx.moveTo(this.x, drawY + 10);
+            ctx.lineTo(this.x + 15, drawY); // Nariz arriba
+            ctx.lineTo(this.x + 35, drawY + 10); // Cola
+            ctx.lineTo(this.x + 15, drawY + 20); // Panza
+            ctx.fill();
+
+            // Chapa superior
+            ctx.fillStyle = '#555';
+            ctx.fillRect(this.x + 10, drawY + 5, 15, 5);
+
+            // Ojo Drone
+            ctx.shadowBlur = 8; ctx.shadowColor = PALETTE.neonBlue;
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(this.x + 15, drawY + 10, 3, 0, Math.PI*2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+    }
+
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450);
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200 }, 
+        { x: 750, y: 490, width: 400, height: 20 }
+    ];
+
+    // --- FUNCIÓN DE FONDO MEJORADA (Skyline Distópico) ---
+    function drawBackground(ctx, cameraX, cameraY) {
+        // Cielo Base
+        let bgGradient = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        bgGradient.addColorStop(0, PALETTE.skyTop);
+        bgGradient.addColorStop(1, PALETTE.skyBottom);
+        ctx.fillStyle = bgGradient;
+        
+        // Efecto Relámpago
+        if (Math.random() < 0.005) thunderIntensity = 1;
+        if (thunderIntensity > 0) {
+            ctx.fillStyle = `rgba(200, 220, 255, ${thunderIntensity * 0.3})`;
+            thunderIntensity *= 0.9; // Desvanecer
+        }
+        
+        ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.restore();
+        
+        // Capas mejoradas
+        const layers = [
+            { speed: 0.02, color: '#080808', heightMod: 600, width: 200, type: 'distant_scraper' }, 
+            { speed: 0.1, color: '#0d0d0d', heightMod: 450, width: 150, type: 'mid_building' }, 
+            { speed: 0.25, color: '#141416', heightMod: 300, width: 250, type: 'near_factory' }, 
+            { speed: 0.5, color: '#1a1a1d', heightMod: 150, width: 300, type: 'foreground_pipes' }
+        ];
+        
+        layers.forEach((layer, index) => {
+            ctx.save(); 
+            let parallaxX = -cameraX * layer.speed; 
+            ctx.translate(parallaxX, 0);
+            
+            let totalW = layer.width; 
+            let startI = Math.floor(-parallaxX / totalW) - 2; 
+            let endI = startI + Math.ceil(GAME_WIDTH / totalW) + 5;
+            
+            for (let i = startI; i < endI; i++) {
+                let rng = Math.sin(i * 132.5 + index * 40.1); 
+                let h = layer.heightMod + (rng * 100);
+                let x = i * totalW; 
+                let y = GAME_HEIGHT - h;
+                
+                ctx.fillStyle = layer.color;
+                
+                if (layer.type === 'distant_scraper') {
+                    // Rascacielos silueteados
+                    ctx.fillRect(x + 10, y, layer.width - 20, h + 500);
+                    // Luces de aviación rojas
+                    if (rng > 0.5) {
+                         ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
+                         ctx.fillRect(x + layer.width/2, y - 2, 2, 2);
+                    }
+                } else if (layer.type === 'near_factory') {
+                    // Estructuras complejas
+                    ctx.beginPath();
+                    ctx.moveTo(x, GAME_HEIGHT);
+                    ctx.lineTo(x, y + 30);
+                    ctx.lineTo(x + 50, y);
+                    ctx.lineTo(x + layer.width, y + 20);
+                    ctx.lineTo(x + layer.width, GAME_HEIGHT);
+                    ctx.fill();
+                    
+                    // Ventanas industriales
+                    ctx.fillStyle = '#111';
+                    for(let w=0; w<3; w++) {
+                        ctx.fillRect(x + 20 + w*30, y + 50, 15, 40);
+                        if (Math.random() > 0.8) { // Ventana iluminada
+                            ctx.fillStyle = 'rgba(255, 200, 100, 0.2)';
+                            ctx.fillRect(x + 22 + w*30, y + 52, 11, 36);
+                            ctx.fillStyle = '#111';
+                        }
+                    }
+                } else {
+                    // Bloques genéricos
+                    ctx.fillRect(x, y, layer.width - 5, h + 500);
+                }
+                
+                // Volver a color base para asegurar relleno
+                ctx.fillStyle = layer.color;
+            }
+            
+            // Niebla entre capas para profundidad
+            ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform para dibujar fog full screen
+            let fogDensity = (index + 1) * 0.05;
+            ctx.fillStyle = `rgba(10, 12, 15, ${fogDensity})`;
+            ctx.fillRect(0, GAME_HEIGHT - (layer.heightMod + 200), GAME_WIDTH, layer.heightMod + 200);
+            
+            ctx.restore();
+        });
+    }
+
+    function drawIndustrialPlatform(ctx, x, y, w, h) {
+        // Textura base de metal
+        let grad = ctx.createLinearGradient(x, y, x, y + h);
+        grad.addColorStop(0, '#2a2a2e');
+        grad.addColorStop(1, '#111');
+        ctx.fillStyle = grad;
+        ctx.fillRect(x, y, w, h);
+
+        // Borde superior reforzado
+        ctx.fillStyle = '#555';
+        ctx.fillRect(x, y, w, 4);
+
+        // Franjas de peligro (Hazard Stripes) solo en bordes
+        if (h < 50) { // Plataforma flotante
+            ctx.fillStyle = '#eec'; // Amarillo sucio
+            ctx.fillRect(x, y + 4, w, 6);
+            ctx.fillStyle = '#111';
+            for(let i=0; i<w; i+=20) {
+                ctx.beginPath();
+                ctx.moveTo(x + i, y + 4);
+                ctx.lineTo(x + i + 10, y + 4);
+                ctx.lineTo(x + i + 5, y + 10);
+                ctx.lineTo(x + i - 5, y + 10);
+                ctx.fill();
+            }
+        } else { // Suelo solido
+            // Remaches y paneles
+            ctx.fillStyle = '#000';
+            for(let i=0; i<w; i+=100) {
+                ctx.fillRect(x + i, y + 20, 2, h-20); // Líneas de separación de placas
+                // Remaches
+                ctx.fillStyle = '#444';
+                ctx.fillRect(x + i + 10, y + 10, 4, 4);
+                ctx.fillRect(x + i + 90, y + 10, 4, 4);
+                ctx.fillStyle = '#000';
+            }
+            
+            // Textura de rejilla en la parte inferior
+            ctx.fillStyle = 'rgba(0,0,0,0.3)';
+            for(let j=y+40; j<y+h; j+=10) {
+                ctx.fillRect(x, j, w, 2);
+            }
+        }
+    }
+
+    function drawMap(ctx) {
+        platforms.forEach(p => {
+            drawIndustrialPlatform(ctx, p.x, p.y, p.width, p.height);
+        });
+    }
+
+    // --- BUCLE PRINCIPAL ---
+    function loop() {
+        gameTime++;
+        camera.x = Math.sin(gameTime * 0.005) * 300 + 100; // Movimiento lento y cinematográfico
+        
+        player.update();
+        walker.update();
+        flyer.update();
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        drawBackground(ctx, camera.x, camera.y);
+        
+        // Efecto de relámpago global (ilumina todo brevemente)
+        if (thunderIntensity > 0.1) {
+            ctx.fillStyle = `rgba(255, 255, 255, ${thunderIntensity * 0.15})`;
+            ctx.fillRect(0,0, GAME_WIDTH, GAME_HEIGHT);
+        }
+
+        // --- CAPA DE JUEGO ---
+        ctx.save();
+        
+        // Ajuste para ver la escena centrada
+        let screenOffsetX = -camera.x + 300;
+        ctx.translate(screenOffsetX, 0);
+
+        // Dibujar objetos del mundo
+        drawMap(ctx);
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+        
+        ctx.restore();
+
+        // --- EFECTOS DE PRIMER PLANO ---
+        rain.updateAndDraw(ctx, camera.x);
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>

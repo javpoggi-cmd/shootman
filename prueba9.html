@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: High-End Production Prototype</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 50px #000;
+            background: #050505;
+            width: 1280px;
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        /* UI Limpia y moderna */
+        #ui-layer {
+            position: absolute;
+            top: 20px; left: 30px;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 10px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            border-left: 2px solid #ff3333;
+            padding-left: 10px;
+        }
+        /* Ruido granulado para evitar que se vea "vectorial" */
+        #noise {
+            position: absolute; top:0; left:0; width:100%; height:100%;
+            background-image: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIj48ZmlsdGVyIGlkPSJnoiPjxmZVR1cmJ1bGVuY2UgdHlwZT0iZnJhY3RhbE5vaXNlIiBiYXNlRnJlcXVlbmN5PSIwLjY1IiBudW1PY3RhdmVzPSIzIiBzdGl0Y2hUaWxlcz0ic3RpdGNoIi8+PC9maWx0ZXI+PHJlY3Qgd2lkdGg9IjEwMCUiIGhlaWdodD0iMTAwJSIgZmlsdGVyPSJ1cmwoI2cpIiBvcGFjaXR5PSIwLjA1Ii8+PC9zdmc+');
+            pointer-events: none;
+            opacity: 0.4;
+            mix-blend-mode: overlay;
+        }
+        #vignette {
+            position: absolute; top:0; left:0; width:100%; height:100%;
+            background: radial-gradient(circle, rgba(0,0,0,0) 60%, rgba(0,0,0,1) 100%);
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="canvas"></canvas>
+    <div id="noise"></div>
+    <div id="vignette"></div>
+    <div id="ui-layer">
+        <h2 style="margin:0; color: #fff;">Sector 7G // Lower Orbit</h2>
+        <p style="margin:5px 0 0 0;">Atmosphere: Toxic Rain</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const W = 1280;
+    const H = 720;
+    canvas.width = W;
+    canvas.height = H;
+
+    // --- CONFIGURACIÓN ESTÉTICA ---
+    const COLORS = {
+        bgTop: '#020305',
+        bgBot: '#0b1016',
+        fog: '#080a0f',
+        lights: ['#ff0055', '#00ccff', '#ffcc00'], // Cyberpunk lights
+        metalDark: '#141414',
+        metalMid: '#2b2b2b',
+        metalLight: '#4a4a4a'
+    };
+
+    // --- UTILIDADES DE DIBUJO ---
+    function drawRect(ctx, x, y, w, h, color) { ctx.fillStyle = color; ctx.fillRect(x, y, w, h); }
+    
+    // Generador de texturas en memoria para no cargar imágenes externas
+    function createPattern(type) {
+        const pCanvas = document.createElement('canvas');
+        const pCtx = pCanvas.getContext('2d');
+        pCanvas.width = 32; pCanvas.height = 32;
+        
+        if (type === 'grate') { // Suelo metálico
+            pCtx.fillStyle = '#1a1a1a'; pCtx.fillRect(0,0,32,32);
+            pCtx.fillStyle = '#111'; pCtx.fillRect(1,1,30,30);
+            pCtx.fillStyle = '#222';
+            pCtx.beginPath();
+            pCtx.moveTo(0,0); pCtx.lineTo(32,32);
+            pCtx.moveTo(32,0); pCtx.lineTo(0,32);
+            pCtx.stroke();
+        }
+        return ctx.createPattern(pCanvas, 'repeat');
+    }
+    const gratePattern = createPattern('grate');
+
+    // --- CLASES ---
+    
+    // 1. JUGADOR (MERCENARIO TÁCTICO)
+    class Player {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.w = 24; this.h = 40;
+            this.vx = 0; this.timer = 0;
+            this.state = 'idle'; this.stateTimer = 0;
+            this.facingRight = true;
+        }
+        update() {
+            this.timer++; this.stateTimer++;
+            // Lógica simple de movimiento
+            if (this.state === 'idle' && this.stateTimer > 100) {
+                this.state = Math.random() > 0.5 ? 'right' : 'left';
+                this.stateTimer = 0;
+            } else if ((this.state === 'right' || this.state === 'left') && this.stateTimer > 80) {
+                this.state = 'idle'; this.stateTimer = 0;
+            }
+            if (this.state === 'right') { this.vx = 2; this.facingRight = true; }
+            else if (this.state === 'left') { this.vx = -2; this.facingRight = false; }
+            else { this.vx = 0; }
+            this.x += this.vx;
+            // Limites
+            if(this.x < 50) { this.x = 50; this.state='right'; }
+            if(this.x > 700) { this.x = 700; this.state='left'; }
+        }
+        draw(ctx) {
+            ctx.save();
+            ctx.translate(this.x + this.w/2, this.y + this.h); // Pivot en los pies
+            if(!this.facingRight) ctx.scale(-1, 1);
+            
+            // Física de la bufanda/capa
+            const wind = Math.sin(this.timer * 0.2) * 5 + (this.vx * -2);
+            
+            // Capa
+            ctx.fillStyle = '#8a2be2'; // Color acento
+            ctx.beginPath();
+            ctx.moveTo(-4, -30);
+            ctx.quadraticCurveTo(-15 + wind, -20, -10 + wind * 1.5, -5);
+            ctx.lineTo(-2, -30);
+            ctx.fill();
+
+            // Piernas (Animación)
+            const walk = this.vx !== 0 ? Math.sin(this.timer * 0.4) * 0.5 : 0;
+            ctx.fillStyle = '#111';
+            // Pierna atras
+            ctx.save(); ctx.translate(-4, -15); ctx.rotate(walk); ctx.fillRect(-3, 0, 6, 15); ctx.restore();
+            // Pierna adelante
+            ctx.save(); ctx.translate(4, -15); ctx.rotate(-walk); ctx.fillRect(-3, 0, 6, 15); ctx.restore();
+
+            // Cuerpo (Armadura)
+            ctx.fillStyle = '#222';
+            ctx.fillRect(-8, -35, 16, 20);
+            // Pechera
+            ctx.fillStyle = '#333';
+            ctx.fillRect(-6, -33, 12, 10);
+            // Luz en el pecho
+            ctx.fillStyle = '#00ffff'; ctx.shadowColor='#00ffff'; ctx.shadowBlur=5;
+            ctx.fillRect(-2, -30, 4, 2); ctx.shadowBlur=0;
+
+            // Cabeza (Casco)
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(-7, -42, 14, 12);
+            // Visor
+            ctx.fillStyle = '#ff3333';
+            ctx.fillRect(0, -38, 7, 3);
+
+            // Arma
+            ctx.fillStyle = '#555';
+            ctx.fillRect(0, -25, 20, 5);
+
+            ctx.restore();
+        }
+    }
+
+    // 2. ENEMIGO WALKER (MECHA-SPIDER)
+    class Walker {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.w = 40; this.h = 30; // Un poco mas ancho visualmente
+            this.timer = 0; this.vx = 1.5;
+            this.origX = x;
+        }
+        update() {
+            this.timer++;
+            this.x += this.vx;
+            if (Math.abs(this.x - this.origX) > 100) this.vx *= -1;
+        }
+        draw(ctx) {
+            ctx.save();
+            ctx.translate(this.x + 15, this.y + 15);
+            
+            // Cuerpo central
+            const bounce = Math.sin(this.timer * 0.3) * 2;
+            
+            // Patas (Inverse Kinematics simulado)
+            ctx.strokeStyle = '#444'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+            for(let i=0; i<4; i++) { // 4 patas visibles
+                const offset = (i - 1.5) * 10;
+                const legCycle = Math.sin(this.timer * 0.2 + i);
+                
+                const footX = offset * 1.5 + (legCycle * 5);
+                const footY = 15 - bounce;
+                const kneeY = -5;
+
+                ctx.beginPath();
+                ctx.moveTo(offset * 0.5, 0 + bounce); // Cadera
+                ctx.lineTo(offset, kneeY + bounce); // Rodilla
+                ctx.lineTo(footX, footY); // Pie
+                ctx.stroke();
+            }
+
+            // Chasis
+            ctx.translate(0, bounce);
+            // Sombra/Glow motor
+            ctx.shadowColor = '#ff5500'; ctx.shadowBlur = 10;
+            ctx.fillStyle = '#111';
+            ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI*2); ctx.fill();
+            ctx.shadowBlur = 0;
+
+            // Ojo ciclope
+            ctx.fillStyle = '#ff0000';
+            const scan = Math.sin(this.timer * 0.1) * 6;
+            ctx.fillRect(scan - 2, -2, 4, 4);
+            
+            ctx.restore();
+        }
+    }
+
+    // 3. ENEMIGO FLYER (DRONE VIGILANCIA)
+    class Flyer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.timer = 0; this.origX = x; this.origY = y;
+        }
+        update() {
+            this.timer++;
+            this.x = this.origX + Math.sin(this.timer * 0.02) * 150;
+            this.y = this.origY + Math.cos(this.timer * 0.03) * 30;
+        }
+        draw(ctx) {
+            ctx.save();
+            ctx.translate(this.x + 15, this.y + 10);
+            const tilt = (Math.cos(this.timer * 0.02) * 0.3);
+            ctx.rotate(tilt);
+
+            // Rotores
+            ctx.fillStyle = 'rgba(200,200,200,0.2)';
+            ctx.beginPath(); ctx.ellipse(-15, -5, 12, 2, 0, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.ellipse(15, -5, 12, 2, 0, 0, Math.PI*2); ctx.fill();
+
+            // Cuerpo
+            ctx.fillStyle = '#ccc'; // Metal blanco sucio
+            ctx.beginPath();
+            ctx.moveTo(-10, 0); ctx.lineTo(10, 0);
+            ctx.lineTo(5, 10); ctx.lineTo(-5, 10);
+            ctx.fill();
+
+            // Luz de escaneo (Cono)
+            ctx.globalCompositeOperation = 'overlay';
+            let grad = ctx.createLinearGradient(0, 10, 0, 80);
+            grad.addColorStop(0, 'rgba(0, 255, 100, 0.5)');
+            grad.addColorStop(1, 'rgba(0, 255, 100, 0)');
+            ctx.fillStyle = grad;
+            ctx.beginPath(); ctx.moveTo(0, 10); ctx.lineTo(-15, 80); ctx.lineTo(15, 80); ctx.fill();
+            ctx.globalCompositeOperation = 'source-over';
+
+            ctx.restore();
+        }
+    }
+
+    // --- GENERACIÓN DE ESCENARIO (PARALLAX MEJORADO) ---
+    
+    // Función para crear edificios "Serios"
+    function generateSkyline(count, minHeight, maxHeight, layerIndex) {
+        let buildings = [];
+        let x = -200;
+        while(x < W + 200) {
+            let w = 50 + Math.random() * 150;
+            let h = minHeight + Math.random() * (maxHeight - minHeight);
+            
+            // Detalles procedurales ("Greebles")
+            let details = [];
+            let detailCount = Math.floor(w / 20);
+            for(let k=0; k<detailCount; k++) {
+                if(Math.random() > 0.5) {
+                    details.push({
+                        type: Math.random() > 0.8 ? 'light' : 'block',
+                        dx: Math.random() * (w - 10),
+                        dy: Math.random() * h,
+                        dw: 5 + Math.random() * 10,
+                        dh: 5 + Math.random() * 20
+                    });
+                }
+            }
+
+            buildings.push({ x, w, h, details });
+            x += w - (Math.random() * 10); // Superposicion leve
+        }
+        return buildings;
+    }
+
+    // 5 Capas de profundidad. 
+    // Truco: Las capas más lejanas se dibujan más arriba en Y para simular inmensidad hacia abajo.
+    const layers = [
+        { speed: 0.02, color: '#050505', buildings: generateSkyline(10, 100, 300, 0), yOffset: 100 },
+        { speed: 0.05, color: '#0a0a0a', buildings: generateSkyline(15, 200, 500, 1), yOffset: 200 },
+        { speed: 0.15, color: '#111111', buildings: generateSkyline(15, 300, 600, 2), yOffset: 300 },
+        { speed: 0.30, color: '#161616', buildings: generateSkyline(10, 400, 800, 3), yOffset: 400 },
+        { speed: 0.60, color: '#1c1c1c', buildings: generateSkyline(8, 200, 600, 4), yOffset: 600 } 
+    ];
+
+    // --- RENDERIZADO DEL FONDO ---
+    function drawBackground(camX) {
+        // Cielo degradado oscuro
+        let grad = ctx.createLinearGradient(0, 0, 0, H);
+        grad.addColorStop(0, '#000000');
+        grad.addColorStop(0.5, '#090909');
+        grad.addColorStop(1, '#1a1a1a');
+        ctx.fillStyle = grad; ctx.fillRect(0,0,W,H);
+
+        // Capas
+        layers.forEach((layer, i) => {
+            let offset = -(camX * layer.speed);
+            
+            // Ajustamos el loop para que sea infinito
+            // Dibujamos el array de edificios 2 veces para cubrir el scroll
+            for(let r=0; r<2; r++) {
+                let loopOffset = r * (W + 400); // Ancho aproximado del loop
+                
+                ctx.save();
+                ctx.translate((offset % (W+400)) + loopOffset, H); // Base abajo
+                
+                layer.buildings.forEach(b => {
+                    // Cuerpo del edificio
+                    // Gradiente sutil para volumen
+                    let bGrad = ctx.createLinearGradient(0, -b.h, 0, 0);
+                    bGrad.addColorStop(0, layer.color);
+                    bGrad.addColorStop(1, '#000');
+                    ctx.fillStyle = bGrad;
+                    
+                    // Dibujamos hacia arriba desde el fondo
+                    // Nota: yOffset mueve toda la capa hacia abajo para dar sensacion de "vacío" bajo el jugador
+                    let drawY = -b.h + layer.yOffset; 
+                    ctx.fillRect(b.x, drawY, b.w, b.h + 500); // +500 para que llene hacia abajo
+
+                    // Detalles (Greebles)
+                    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+                    b.details.forEach(d => {
+                        if(d.type === 'block') {
+                            ctx.fillRect(b.x + d.dx, drawY + d.dy, d.dw, d.dh);
+                        } else if (d.type === 'light' && i > 1) { // Solo luces en capas cercanas
+                            // Luces rojas de aviacion o ventanas de oficinas
+                            ctx.fillStyle = Math.random() > 0.9 ? '#fff' : '#aa0000';
+                            ctx.fillRect(b.x + d.dx, drawY + d.dy, 2, 2);
+                            ctx.fillStyle = 'rgba(0,0,0,0.3)';
+                        }
+                    });
+                    
+                    // Linea de borde sutil para definir silueta
+                    ctx.strokeStyle = '#222'; ctx.lineWidth = 1;
+                    ctx.strokeRect(b.x, drawY, b.w, b.h+500);
+                });
+                ctx.restore();
+            }
+
+            // Niebla volumétrica entre capas para separar planos
+            let fogHeight = H - (i * 50);
+            let fog = ctx.createLinearGradient(0, H - 200, 0, H);
+            fog.addColorStop(0, 'rgba(0,0,0,0)');
+            fog.addColorStop(1, `rgba(0,0,0,${0.3 + (i*0.1)})`);
+            ctx.fillStyle = fog;
+            ctx.fillRect(0, 0, W, H);
+        });
+    }
+
+    // --- PLATAFORMAS INDUSTRIALES ---
+    const mapObjects = [
+        { x: 0, y: 540, w: 800, h: 180 },
+        { x: 750, y: 490, w: 400, h: 20 }
+    ];
+
+    function drawMap(camX) {
+        ctx.save();
+        // Movemos el mundo (fake scroll)
+        // Para la demo, mantenemos objetos centrados pero movemos texturas?
+        // No, movemos todo el contexto contrario a la camara, pero en este demo los objetos son fijos
+        // Solo desplazamos visualmente si quisieramos scroll real. Aquí dibujamos estático.
+        
+        mapObjects.forEach(obj => {
+            // 1. Base solida
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(obj.x, obj.y, obj.w, obj.h);
+
+            // 2. Textura Rejilla (Suelo)
+            ctx.fillStyle = gratePattern;
+            ctx.fillRect(obj.x, obj.y, obj.w, obj.h);
+
+            // 3. Bordes industriales
+            ctx.strokeStyle = '#555'; ctx.lineWidth = 2;
+            ctx.strokeRect(obj.x, obj.y, obj.w, obj.h);
+
+            // 4. Cables colgados (Debajo)
+            if (obj.h < 50) { // Solo si es una plataforma flotante
+                ctx.beginPath();
+                ctx.strokeStyle = '#111';
+                ctx.lineWidth = 2;
+                // Cable 1
+                ctx.moveTo(obj.x + 20, obj.y + obj.h);
+                ctx.bezierCurveTo(obj.x + 20, obj.y + obj.h + 50, obj.x + 100, obj.y + obj.h + 50, obj.x + 120, obj.y + obj.h);
+                // Cable 2
+                ctx.moveTo(obj.x + obj.w - 50, obj.y + obj.h);
+                ctx.bezierCurveTo(obj.x + obj.w - 50, obj.y + obj.h + 80, obj.x + obj.w - 10, obj.y + obj.h + 80, obj.x + obj.w, obj.y + obj.h);
+                ctx.stroke();
+            }
+
+            // 5. Marcas de peligro (Stripes) solo en los bordes
+            ctx.fillStyle = '#ccaa00';
+            for(let i=0; i<obj.w; i+= 100) {
+                ctx.fillRect(obj.x + i, obj.y + obj.h - 5, 20, 5);
+            }
+        });
+        ctx.restore();
+    }
+
+    // --- SISTEMA DE CLIMA (LLUVIA Y RELAMPAGOS) ---
+    let rain = [];
+    for(let i=0; i<500; i++) rain.push({x: Math.random()*W, y: Math.random()*H, v: 15+Math.random()*10});
+    
+    let flash = 0;
+    let flashTimer = 200;
+
+    function drawWeather() {
+        // Lluvia
+        ctx.strokeStyle = 'rgba(150, 180, 200, 0.2)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        rain.forEach(r => {
+            r.y += r.v;
+            r.x -= 2; // Viento
+            if(r.y > H) { r.y = -10; r.x = Math.random()*W + 100; }
+            ctx.moveTo(r.x, r.y);
+            ctx.lineTo(r.x - 3, r.y + 10);
+        });
+        ctx.stroke();
+
+        // Relampagos
+        if(flashTimer-- <= 0) {
+            flash = 1;
+            flashTimer = 300 + Math.random() * 500;
+        }
+        if (flash > 0) {
+            ctx.fillStyle = `rgba(255, 255, 255, ${flash * 0.4})`;
+            ctx.fillRect(0,0,W,H);
+            flash *= 0.9; // Fade out
+        }
+    }
+
+    // --- BUCLE PRINCIPAL ---
+    const player = new Player(200, 500);
+    const walker = new Walker(800, 470); // Ajuste Y por tamaño nuevo
+    const flyer = new Flyer(600, 200);
+    
+    let camX = 0;
+
+    function loop() {
+        camX += 2; // Velocidad de scroll
+        
+        // Logica
+        player.update();
+        walker.update();
+        flyer.update();
+
+        // Render
+        ctx.clearRect(0,0,W,H);
+        
+        drawBackground(camX);
+        drawMap(camX);
+        
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+        
+        drawWeather();
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>

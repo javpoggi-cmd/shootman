@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: High-Prod Visual Testbed</title>
+    <style>
+        body {
+            margin: 0; padding: 0; background-color: #000;
+            overflow: hidden; display: flex;
+            justify-content: center; align-items: center; height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 60px rgba(0, 10, 20, 0.9);
+            border: 2px solid #1a1a20;
+            background: #000;
+            width: 1280px; height: 720px;
+        }
+        canvas { display: block; width: 100%; height: 100%; }
+        
+        /* Reducimos un poco el efecto scanline para que se vean los nuevos detalles */
+        #scanlines {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(10, 10, 10, 0) 50%, rgba(0, 0, 0, 0.15) 50%),
+                        linear-gradient(90deg, rgba(100, 100, 255, 0.02), rgba(0, 0, 0, 0.02), rgba(100, 100, 255, 0.02));
+            background-size: 100% 3px, 4px 100%;
+            pointer-events: none; z-index: 50; mix-blend-mode: overlay;
+        }
+        /* Viñeta para oscurecer esquinas */
+        #vignette {
+             position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+             background: radial-gradient(circle at center, transparent 40%, rgba(0,0,0,0.8) 100%);
+             pointer-events: none; z-index: 40;
+        }
+        #debug-ui {
+            position: absolute; top: 10px; left: 10px; color: #00ddee; z-index: 60;
+            background: rgba(0,10,20,0.6); padding: 10px; border-left: 3px solid #00ddee;
+            font-family: 'Courier New', Courier, monospace; text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        h3 { margin: 0 0 5px 0; font-size: 16px; }
+        p { margin: 2px 0; font-size: 12px; opacity: 0.8; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="testCanvas"></canvas>
+    <div id="scanlines"></div>
+    <div id="vignette"></div>
+    <div id="debug-ui">
+        <h3>Visual Target: NEO-NOIR INDUSTRIAL</h3>
+        <p>Atmosphere: Heavy Rain / Storm</p>
+        <p>Layers: 5-Stage Parallax</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280;
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH;
+    canvas.height = GAME_HEIGHT;
+
+    // --- NUEVA CONFIGURACIÓN ESTÉTICA ---
+    // Paleta de colores "seria": Azules oscuros, grises metálicos, acentos de neón enfermizo.
+    const PALETTE = {
+        skyBase: '#0a0b14', // Cielo nocturno tormentoso
+        lightning: '#ffffff',
+        
+        // Capas de fondo (de más lejos a más cerca)
+        bg1: '#050608', // Siluetas lejanas
+        bg2: '#0a0c14',
+        bg3: '#111421',
+        bg4: '#192033',
+        bg5: '#222b45', // Capa más cercana antes del juego
+
+        // Entorno jugable
+        metalDark: '#1a1b21',
+        metalMid: '#2d313d',
+        metalLight: '#4a5266',
+        rust: '#47332e',
+        neonAccent: '#00ffaa', // Cyan industrial
+        enemyAccent: '#ff3311'  // Rojo hostil
+    };
+
+    // Variables atmosféricas
+    let lightningIntensity = 0;
+    let lightningTimer = Math.random() * 200;
+    const rainDrops = [];
+    for(let i=0; i< 400; i++) { // 400 gotas de lluvia para lluvia densa
+        rainDrops.push({
+            x: Math.random() * GAME_WIDTH,
+            y: Math.random() * GAME_HEIGHT,
+            speed: 15 + Math.random() * 10,
+            length: 20 + Math.random() * 30
+        });
+    }
+
+    // --- VARIABLES DE SIMULACIÓN ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+
+    // ==========================================
+    // CLASES SIMULADAS (REDSEÑADAS VISUALMENTE)
+    // ==========================================
+
+    // Funciones de ayuda para dibujo detallado
+    function drawMetalPlate(ctx, x, y, w, h, darkColor, lightColor, rivets = false) {
+        // Base metálica con gradiente sutil
+        const grd = ctx.createLinearGradient(x, y, x, y + h);
+        grd.addColorStop(0, lightColor);
+        grd.addColorStop(1, darkColor);
+        ctx.fillStyle = grd;
+        ctx.fillRect(x, y, w, h);
+        
+        // Borde de luz superior e izquierdo (highlight)
+        ctx.fillStyle = 'rgba(255,255,255,0.2)';
+        ctx.fillRect(x, y, w, 1);
+        ctx.fillRect(x, y, 1, h);
+        
+        // Borde de sombra inferior y derecho
+        ctx.fillStyle = 'rgba(0,0,0,0.4)';
+        ctx.fillRect(x, y+h-1, w, 1);
+        ctx.fillRect(x+w-1, y, 1, h);
+
+        if (rivets) {
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(x+2, y+2, 2, 2);
+            ctx.fillRect(x+w-4, y+2, 2, 2);
+            ctx.fillRect(x+2, y+h-4, 2, 2);
+            ctx.fillRect(x+w-4, y+h-4, 2, 2);
+        }
+    }
+
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            // TAMAÑOS ORIGINALES MANTENIDOS: width: 24, height: 40
+            this.width = 24; this.height = 40;
+            this.vx = 0;
+            this.animTimer = 0;
+            this.facingRight = true;
+            this.state = 'wait';
+            this.stateTimer = 0;
+        }
+        update() {
+            this.animTimer++;
+            this.stateTimer++;
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) {
+                    this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left';
+                    this.stateTimer = 0;
+                }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3; this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3; this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+        }
+
+        draw(ctx) {
+            ctx.save();
+            // Inclinación sutil al correr
+            let lean = 0; if (Math.abs(this.vx) > 1) lean = this.facingRight ? 2 : -2;
+            ctx.translate(lean, 0);
+
+            const midColor = '#3a4252';
+            const darkColor = '#1e212b';
+            
+            // --- DISEÑO DE JUGADOR TÁCTICO/CYBERPUNK ---
+
+            // Animación de piernas (Armadura pesada)
+            let legOffset = 0;
+            if (Math.abs(this.vx) > 0.5) {
+                legOffset = Math.sin(this.animTimer * 0.5) * 3;
+            }
+            // Pierna trasera
+            drawMetalPlate(ctx, this.x + 4, this.y + 22, 7, 18 - legOffset, darkColor, midColor);
+            // Pierna delantera
+            drawMetalPlate(ctx, this.x + 13, this.y + 22, 7, 18 + legOffset, darkColor, midColor);
+
+            // Torso (Chaleco táctico)
+            drawMetalPlate(ctx, this.x, this.y + 10, this.width, 15, darkColor, midColor);
+            // Placa pectoral detallada
+            ctx.fillStyle = '#252a36';
+            ctx.fillRect(this.x + 4, this.y + 12, this.width - 8, 8);
+            ctx.fillStyle = '#111'; // Detalles del chaleco
+            ctx.fillRect(this.x + 6, this.y + 14, 4, 3);
+            ctx.fillRect(this.x + 14, this.y + 14, 4, 3);
+
+            // Casco Táctico
+            drawMetalPlate(ctx, this.x + 2, this.y, 20, 12, darkColor, midColor);
+            
+            // VISOR BRILLANTE (Efecto de luz)
+            ctx.save();
+            ctx.shadowColor = PALETTE.neonAccent;
+            ctx.shadowBlur = 10;
+            ctx.fillStyle = PALETTE.neonAccent;
+            let visorX = this.facingRight ? this.x + 12 : this.x + 2;
+            ctx.fillRect(visorX, this.y + 4, 10, 3);
+            ctx.fillStyle = '#fff'; // Brillo central intenso
+            ctx.fillRect(visorX + 2, this.y + 5, 6, 1);
+            ctx.restore();
+
+            // Mochila/Batería (Con luz indicadora)
+            let packX = this.facingRight ? this.x - 3 : this.x + 20;
+            drawMetalPlate(ctx, packX, this.y + 11, 3, 12, '#111', '#222');
+            ctx.fillStyle = this.animTimer % 60 < 30 ? '#f00' : '#500'; // Luz parpadeante roja pequeña
+            ctx.fillRect(packX + 1, this.y + 13, 1, 2);
+
+            // Arma (Rifle pesado)
+            ctx.fillStyle = '#222';
+            let gunX = this.facingRight ? this.x + 12 : this.x - 8;
+            let gunY = this.y + 15;
+            // Cuerpo principal arma
+            ctx.fillRect(gunX, gunY, 18, 7);
+            ctx.fillStyle = '#111';
+            ctx.fillRect(gunX + 2, gunY + 1, 14, 3); // Detalle superior
+            // Cañón
+            ctx.fillStyle = '#333';
+            ctx.fillRect(this.facingRight ? gunX + 18 : gunX - 4, gunY + 2, 4, 3);
+             // Mira holográfica sutil
+            ctx.fillStyle = 'rgba(0, 255, 170, 0.3)';
+            ctx.fillRect(gunX + 6, gunY - 2, 6, 2);
+
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            // TAMAÑOS ORIGINALES MANTENIDOS: width: 30, height: 30
+            this.width = 30; this.height = 30;
+            this.vx = 2; this.dir = 1; this.timer = 0; this.state = 'walk'; this.startX = x; this.waitTimer = 0;
+        }
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) {
+                    this.state = 'wait'; this.waitTimer = 60;
+                }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) {
+                    this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk';
+                }
+            }
+        }
+        draw(ctx) {
+            // --- DISEÑO: MECH BIPEDAL PESADO ---
+            let anim = Math.sin(this.timer * 0.15);
+            // Ajustamos Y para dibujar dentro del cuadro original de 30x30 más el espacio superior
+            let drawY = this.y - 10;
+            const mainColor = '#5e2f2f'; // Rojo oscuro industrial
+            const secondaryColor = '#3d1f1f';
+            
+            // Chasis principal (Cuerpo blindado)
+            drawMetalPlate(ctx, this.x, drawY, this.width, 20, secondaryColor, mainColor, true);
+            
+            // "Ojo" Sensor Hostil (Brillante)
+            ctx.save();
+            ctx.shadowColor = PALETTE.enemyAccent;
+            ctx.shadowBlur = 15;
+            ctx.fillStyle = PALETTE.enemyAccent;
+            // Ojo parpadeante
+            let eyeIntensity = 0.8 + Math.sin(this.timer * 0.3) * 0.2;
+            ctx.globalAlpha = eyeIntensity;
+            ctx.fillRect(this.x + 12, drawY + 6, 8, 6);
+            ctx.globalAlpha = 1.0;
+            
+            ctx.fillStyle = '#fff'; // Centro blanco caliente
+            ctx.fillRect(this.x + 14, drawY + 8, 4, 2);
+            ctx.restore();
+
+            // Brazos/Cañones laterales rotatorios (Pistones hidráulicos)
+            ctx.fillStyle = '#222';
+            ctx.save(); ctx.translate(this.x + 3, drawY + 15); ctx.rotate(anim * 0.3);
+            ctx.fillRect(0, -2, 6, 14); // Brazo Izt
+            // Punta de cañon
+            ctx.fillStyle = '#111'; ctx.fillRect(1, 12, 4, 3);
+            ctx.restore();
+            
+            ctx.fillStyle = '#222';
+            ctx.save(); ctx.translate(this.x + 27, drawY + 15); ctx.rotate(-anim * 0.3);
+            ctx.fillRect(-6, -2, 6, 14); // Brazo Der
+            // Punta de cañon
+            ctx.fillStyle = '#111'; ctx.fillRect(-5, 12, 4, 3);
+            ctx.restore();
+
+            // Piernas Mecánicas (Pistones complejos)
+            const legHeight = 15;
+            let legAnim1 = anim * 4;
+            let legAnim2 = -anim * 4;
+
+            // Pierna Izquierda
+            ctx.fillStyle = '#1a1a1a'; // Articulación superior
+            ctx.fillRect(this.x + 5, drawY + 20, 6, 4);
+            // Pistón inferior
+            drawMetalPlate(ctx, this.x + 6, drawY + 24, 4, legHeight + legAnim1, '#111', '#333');
+            ctx.fillStyle = '#444'; // Pie
+            ctx.fillRect(this.x + 4, drawY + 24 + legHeight + legAnim1 - 2, 8, 4);
+
+            // Pierna Derecha
+            ctx.fillStyle = '#1a1a1a'; // Articulación
+            ctx.fillRect(this.x + 19, drawY + 20, 6, 4);
+            // Pistón inferior
+            drawMetalPlate(ctx, this.x + 20, drawY + 24, 4, legHeight + legAnim2, '#111', '#333');
+            ctx.fillStyle = '#444'; // Pie
+            ctx.fillRect(this.x + 18, drawY + 24 + legHeight + legAnim2 - 2, 8, 4);
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            // TAMAÑOS ORIGINALES MANTENIDOS: width: 30, height: 20
+            this.width = 30; this.height = 20;
+            this.startX = x; this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1;
+        }
+        draw(ctx) {
+            // --- DISEÑO: DRON VIGILANCIA VTOL ---
+            let hover = Math.sin(this.timer * 0.2) * 2;
+            let drawY = this.y + hover;
+            
+            // Cuerpo central del dron
+            drawMetalPlate(ctx, this.x + 5, drawY, 20, 14, '#222', '#444');
+            
+            // Sensor óptico inferior (Cámara)
+            ctx.fillStyle = '#111';
+            ctx.beginPath(); ctx.arc(this.x + 15, drawY + 14, 4, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = PALETTE.enemyAccent; // Lente roja
+            ctx.beginPath(); ctx.arc(this.x + 15, drawY + 15, 2, 0, Math.PI*2); ctx.fill();
+            
+            // Rotores/Alas laterales (Motores VTOL inclinables)
+            const wingColor = '#333';
+            let rotorTilt = Math.sin(this.timer * 0.05) * 0.2;
+
+            ctx.save(); // Ala izquierda
+            ctx.translate(this.x + 2, drawY + 7);
+            ctx.rotate(rotorTilt);
+            ctx.fillStyle = wingColor; ctx.fillRect(-10, -3, 10, 6); // Carcasa motor
+            // Efecto de propulsión (azul caliente)
+            ctx.fillStyle = '#4466ff'; ctx.globalAlpha = 0.6;
+            ctx.fillRect(-12, -1, 4, 2);
+            ctx.restore();
+
+            ctx.save(); // Ala derecha
+            ctx.translate(this.x + 28, drawY + 7);
+            ctx.rotate(-rotorTilt);
+            ctx.fillStyle = wingColor; ctx.fillRect(0, -3, 10, 6); // Carcasa motor
+             // Efecto de propulsión
+            ctx.fillStyle = '#4466ff'; ctx.globalAlpha = 0.6;
+            ctx.fillRect(8, -1, 4, 2);
+            ctx.restore();
+            ctx.globalAlpha = 1.0;
+
+            // Antena pequeña y luz estroboscópica
+            ctx.fillStyle = '#555'; ctx.fillRect(this.x + 22, drawY - 5, 1, 5);
+            if (this.timer % 40 < 5) { // Flash blanco breve
+                ctx.fillStyle = '#fff'; ctx.fillRect(this.x + 21, drawY - 6, 3, 3);
+            }
+        }
+    }
+
+    // --- GENERACIÓN DEL ESCENARIO ---
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450);
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: -100, y: 540, width: 1400, height: 200 }, // Suelo expandido
+        { x: 750, y: 490, width: 400, height: 30 }
+    ];
+
+    // ==========================================
+    // NUEVAS FUNCIONES DE DIBUJO DE ENTORNO
+    // ==========================================
+
+    function drawBackground(ctx, cameraX, cameraY) {
+        // Manejo de relámpagos y color del cielo
+        lightningTimer--;
+        if (lightningTimer <= 0) {
+            lightningIntensity = 1.0; // Flash completo
+            lightningTimer = 100 + Math.random() * 300; // Próximo relámpago aleatorio
+        }
+        if (lightningIntensity > 0) {
+            lightningIntensity -= 0.05; // Desvanecimiento rápido
+            if(lightningIntensity < 0) lightningIntensity = 0;
+        }
+
+        // Cielo base + Flash de relámpago
+        ctx.save();
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+        // Mezclamos el color base del cielo con blanco según la intensidad del relámpago
+        let skyR = parseInt(PALETTE.skyBase.slice(1,3), 16);
+        let skyG = parseInt(PALETTE.skyBase.slice(3,5), 16);
+        let skyB = parseInt(PALETTE.skyBase.slice(5,7), 16);
+        let finalR = Math.min(255, skyR + lightningIntensity * 200);
+        let finalG = Math.min(255, skyG + lightningIntensity * 200);
+        let finalB = Math.min(255, skyB + lightningIntensity * 240); // Un poco más azul en el flash
+        ctx.fillStyle = `rgb(${finalR}, ${finalG}, ${finalB})`;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Gradiente atmosférico (smog luminoso en la parte inferior)
+        let atmGrd = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        atmGrd.addColorStop(0.5, 'transparent');
+        atmGrd.addColorStop(1, 'rgba(20, 30, 50, 0.5)');
+        ctx.fillStyle = atmGrd;
+        ctx.fillRect(0,0, canvas.width, canvas.height);
+
+        ctx.restore();
+
+        // DEFINICIÓN DE 5 CAPAS DE PARALLAX (Siluetas de ciudad industrial)
+        const layers = [
+            { speed: 0.02, color: PALETTE.bg1, baseHeight: 600, density: 0.3, maxWidth: 300, hasLights: false },
+            { speed: 0.10, color: PALETTE.bg2, baseHeight: 500, density: 0.4, maxWidth: 250, hasLights: true, lightChance: 0.95 },
+            { speed: 0.25, color: PALETTE.bg3, baseHeight: 400, density: 0.5, maxWidth: 200, hasLights: true, lightChance: 0.9 },
+            { speed: 0.50, color: PALETTE.bg4, baseHeight: 250, density: 0.6, maxWidth: 150, hasLights: true, lightChance: 0.85 },
+            { speed: 0.75, color: PALETTE.bg5, baseHeight: 100, density: 0.7, maxWidth: 120, hasLights: true, lightChance: 0.7 }
+        ];
+
+        layers.forEach((layer, index) => {
+            ctx.save();
+            let parallaxX = -cameraX * layer.speed;
+            // Menos movimiento vertical para que parezca más estable
+            let parallaxY = -cameraY * (layer.speed * 0.2) + (layer.speed * 50); 
+            ctx.translate(parallaxX, parallaxY);
+
+            // Usamos un generador pseudo-aleatorio basado en el índice 'i' para que el paisaje sea consistente
+            // pero parezca variado.
+            let startI = Math.floor(-parallaxX / layer.maxWidth) - 5;
+            let endI = startI + Math.ceil(GAME_WIDTH / layer.maxWidth) + 10;
+
+            for (let i = startI; i < endI; i++) {
+                // Semilla pseudo-aleatoria para esta "construcción"
+                let seed = (i * 134.5 + index * 55.1);
+                let pseudoRandomH = Math.sin(seed) * 0.5 + 0.5; // 0.0 a 1.0
+                let pseudoRandomW = Math.cos(seed * 0.9);
+
+                if (Math.sin(seed * 2) > layer.density) continue; // Espacios vacíos
+
+                let h = layer.baseHeight + (pseudoRandomH * 300);
+                let w = layer.maxWidth * (0.5 + Math.abs(pseudoRandomW) * 0.5);
+                let x = i * layer.maxWidth;
+                let y = GAME_HEIGHT - h;
+
+                // Dibujar edificio/estructura
+                ctx.fillStyle = layer.color;
+                ctx.fillRect(x, y, w, h + 500);
+
+                // Detalles arquitectónicos simples (crestas, antenas) para romper la silueta
+                if (pseudoRandomW > 0.5) {
+                     ctx.fillRect(x + w*0.2, y - 20, w*0.1, 20); // Antena gruesa
+                     ctx.fillRect(x + w*0.6, y - 40, 2, 40); // Antena fina
+                } else if (pseudoRandomW < -0.5) {
+                    ctx.fillRect(x, y-10, w, 10); // Techo plano más alto
+                }
+
+                // Ventanas / Luces distantes
+                if (layer.hasLights && Math.sin(seed * 3) > 0.2) {
+                    let rows = Math.floor(h / 30);
+                    let cols = Math.floor(w / 20);
+                    for(let r=0; r<rows; r++) {
+                        for(let c=0; c<cols; c++) {
+                             // Probabilidad alta de que una ventana esté apagada
+                            if(Math.random() > layer.lightChance) {
+                                let lightSeed = Math.random();
+                                if(lightSeed > 0.7) ctx.fillStyle = 'rgba(255, 255, 200, 0.8)'; // Amarillo cálido
+                                else if (lightSeed > 0.4) ctx.fillStyle = 'rgba(200, 255, 255, 0.6)'; // Azul frío
+                                else ctx.fillStyle = PALETTE.neonAccent; // Neón raro
+                                
+                                // Ventanas pequeñas y dispersas
+                                ctx.fillRect(x + 10 + c*20, y + 20 + r*30, 3, 5);
+                            }
+                        }
+                    }
+                }
+                // Restablecer color para la siguiente iteración
+                ctx.fillStyle = layer.color;
+            }
+            ctx.restore();
+        });
+    }
+
+    function drawMap(ctx) {
+        // Sombra general de las plataformas para dar profundidad
+        ctx.shadowColor = '#000';
+        ctx.shadowBlur = 20;
+        ctx.shadowOffsetY = 10;
+
+        platforms.forEach(p => {
+            // 1. Subestructura (Vigas de soporte oscuras)
+            ctx.fillStyle = '#15151a';
+            ctx.fillRect(p.x + 5, p.y + 15, p.width - 10, p.height - 15);
+            
+            // Patrón de vigas cruzadas (solo si es lo suficientemente alto)
+            if(p.height > 40) {
+                ctx.strokeStyle = '#222';
+                ctx.lineWidth = 4;
+                ctx.beginPath();
+                for(let i = p.x; i < p.x + p.width; i+= 50) {
+                    ctx.moveTo(i, p.y + 15); ctx.lineTo(i+25, p.y + p.height);
+                    ctx.moveTo(i+25, p.y + 15); ctx.lineTo(i, p.y + p.height);
+                }
+                ctx.stroke();
+            }
+
+            ctx.shadowBlur = 0; // Reset sombra para detalles finos
+
+            // 2. Placa superior (Suelo de rejilla metálica)
+            drawMetalPlate(ctx, p.x, p.y, p.width, 15, PALETTE.metalMid, PALETTE.metalLight);
+
+            // Textura de rejilla
+            ctx.fillStyle = 'rgba(0,0,0,0.3)';
+            for(let i = p.x; i < p.x + p.width; i += 10) {
+                ctx.fillRect(i, p.y, 2, 15);
+            }
+            
+            // 3. Detalles de borde y suciedad
+            ctx.fillStyle = PALETTE.rust;
+            // Manchas de óxido aleatorias en el borde inferior de la placa superior
+            for(let i = p.x; i < p.x + p.width; i += 30 + Math.random()*40) {
+                 ctx.fillRect(i, p.y + 13, 10 + Math.random()*10, 4);
+            }
+
+            // Cables colgando (solo en plataformas elevadas)
+            if (p.y < 500 && p.width < 600) {
+                ctx.strokeStyle = '#111';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                // Cable 1
+                ctx.moveTo(p.x + 50, p.y + p.height);
+                ctx.bezierCurveTo(p.x + 60, p.y + p.height + 30, p.x + 150, p.y + p.height + 40, p.x + 200, p.y + p.height);
+                // Cable 2
+                ctx.moveTo(p.x + p.width - 50, p.y + p.height);
+                ctx.quadraticCurveTo(p.x + p.width - 80, p.y + p.height + 50, p.x + p.width - 120, p.y + p.height);
+                ctx.stroke();
+            }
+        });
+        ctx.shadowBlur = 0; // Reset final
+    }
+
+    function drawAtmosphereOverlay(ctx) {
+        // DIBUJAR LLUVIA DENSA
+        ctx.strokeStyle = 'rgba(180, 200, 255, 0.3)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (let drop of rainDrops) {
+            ctx.moveTo(drop.x, drop.y);
+            // Lluvia en ángulo por el viento
+            ctx.lineTo(drop.x - drop.length * 0.3, drop.y + drop.length);
+            
+            // Actualizar posición
+            drop.y += drop.speed;
+            drop.x -= drop.speed * 0.3; // Movimiento lateral
+            // Reset si sale de pantalla
+            if (drop.y > GAME_HEIGHT || drop.x < 0) {
+                drop.y = Math.random() * -100; // Empezar desde arriba fuera de pantalla
+                drop.x = Math.random() * GAME_WIDTH + 200; // Compensar el desplazamiento lateral
+            }
+        }
+        ctx.stroke();
+        
+        // "Splash" de lluvia en el suelo (simple)
+        ctx.fillStyle = 'rgba(200, 220, 255, 0.4)';
+        for(let i=0; i<10; i++) {
+             let splashX = Math.random() * GAME_WIDTH;
+             // Asumimos que el suelo está alrededor de y=540
+             ctx.fillRect(splashX, 540 + Math.random()*5, 4, 2);
+        }
+
+        // Si hubo relámpago intenso, un flash blanco sobre toda la pantalla que se desvanece
+        if(lightningIntensity > 0.5) {
+            ctx.fillStyle = `rgba(255, 255, 255, ${lightningIntensity * 0.15})`;
+            ctx.fillRect(0,0, GAME_WIDTH, GAME_HEIGHT);
+        }
+    }
+
+    // --- BUCLE PRINCIPAL ---
+    function loop() {
+        gameTime++;
+        // Cámara sigue una trayectoria suave
+        camera.x = Math.sin(gameTime * 0.008) * 250;
+        camera.y = Math.cos(gameTime * 0.01) * 30;
+
+        player.update();
+        walker.update();
+        flyer.update();
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 1. FONDO (Afectado por Parallax)
+        drawBackground(ctx, camera.x, camera.y);
+
+        // --- ÁREA DE JUEGO ---
+        ctx.save();
+        // Aplicamos la cámara al mundo del juego.
+        // Centramos un poco la acción (offsetX +200)
+        let worldOffsetX = -camera.x + 200;
+        let worldOffsetY = -camera.y;
+        ctx.translate(worldOffsetX, worldOffsetY);
+
+        // 2. MAPA (Plataformas)
+        drawMap(ctx);
+
+        // 3. ENTIDADES
+        // Para este test visual, forzamos a las entidades a mantenerse en el centro de la pantalla
+        // contrarrestando el movimiento de la cámara, para que se puedan apreciar los detalles.
+        
+        ctx.save();
+        // HACK VISUAL PARA TESTBED: Mantener personajes centrados en pantalla.
+        // Anulamos la traslación de la cámara solo para ellos.
+        ctx.translate(-worldOffsetX + 200, -worldOffsetY);
+        // Pequeño bobbing vertical para que no parezcan pegados al cristal
+        ctx.translate(0, Math.sin(gameTime*0.05)*2); 
+        
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+        ctx.restore(); // Fin del hack de entidades
+
+        ctx.restore(); // Fin del área de juego
+
+        // 4. ATMÓSFERA (Overlay en espacio de pantalla, no de mundo)
+        drawAtmosphereOverlay(ctx);
+
+        requestAnimationFrame(loop);
+    }
+
+    // Iniciar
+    loop();
+
+</script>
+</body>
+</html>

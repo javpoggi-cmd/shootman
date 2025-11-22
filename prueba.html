@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Visual Design Testbed</title>
+    <style>
+        /* ESTILOS ORIGINALES DEL JUEGO */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050505;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.8);
+            border: 4px solid #333;
+            background: #000;
+            width: 1280px; /* Tamaño fijo para test */
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            background-color: #0f1210;
+            image-rendering: pixelated;
+            width: 100%;
+            height: 100%;
+        }
+        #scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), 
+                        linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 4px, 6px 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+        #debug-ui {
+            position: absolute; top: 10px; left: 10px; color: #00ffaa; z-index: 20;
+            background: rgba(0,0,0,0.7); padding: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="testCanvas"></canvas>
+    <div id="scanlines"></div>
+    <div id="debug-ui">
+        <h3>TEST DE DISEÑO</h3>
+        <p>Bioma: INDUSTRIAL</p>
+        <p>Cámara: Auto-Scroll</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- CONFIGURACIÓN DE COLORES ORIGINAL ---
+    const COLORS = { 
+        player: '#e0e0e0', 
+        playerAccent: '#ffaa00', 
+        bullet: '#00ffaa', 
+        enemyBullet: '#ff4444', 
+        weapon: '#00ff00' 
+    };
+    
+    // Usamos el primer bioma (INDUSTRIAL) como base
+    const currentBiome = { 
+        name: "INDUSTRIAL", 
+        sky: '#050505', 
+        layers: ['#0a0a0a', '#111111', '#1a1a1a', '#222222'], 
+        ground: '#2a332e', 
+        top: '#4a5e52' 
+    };
+    
+    const ENEMY_COLOR = '#cc4444';
+
+    // --- VARIABLES DE SIMULACIÓN ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+    
+    // --- CLASES SIMULADAS (MOCKS) ---
+    // Estas clases contienen SOLO la lógica de dibujo y una IA de movimiento simple
+
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 24; this.height = 40;
+            this.vx = 0; 
+            this.animTimer = 0;
+            this.facingRight = true;
+            this.state = 'wait'; // wait, walk_right, walk_left
+            this.stateTimer = 0;
+        }
+
+        update() {
+            this.animTimer++;
+            this.stateTimer++;
+
+            // IA Simple: Caminar y Parar
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { // Esperar 1 segundo
+                    this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left';
+                    this.stateTimer = 0;
+                }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3;
+                this.facingRight = true;
+                this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3;
+                this.facingRight = false;
+                this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            
+            // Limites simples
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+        }
+
+        draw(ctx) {
+            // --- CÓDIGO DE DIBUJO EXTRAÍDO DE Player.draw ---
+            ctx.save(); ctx.fillStyle = COLORS.player;
+            let lean = 0; if (Math.abs(this.vx) > 1) lean = this.facingRight ? 3 : -3; 
+            ctx.translate(lean, 0);
+            
+            // Animación de piernas
+            if (Math.abs(this.vx) > 0.5) {
+                let cycle = Math.sin(this.animTimer * 0.5);
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15 + cycle * 3); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15 - cycle * 3);
+            } else { 
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15); 
+            }
+            
+            // Cuerpo y Cabeza
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x, this.y + 10, this.width, 18);
+            ctx.fillStyle = '#55f'; ctx.fillRect(this.facingRight ? this.x - 4 : this.x + 20, this.y + 12, 4, 10); // Mochila/Jetpack
+            ctx.fillStyle = '#333'; ctx.fillRect(this.x + 2, this.y, 20, 12); // Casco
+            ctx.fillStyle = COLORS.playerAccent; ctx.fillRect(this.facingRight ? this.x + 12 : this.x + 2, this.y + 3, 10, 4); // Visor
+
+            // Arma
+            ctx.fillStyle = '#555';
+            let gunX = this.facingRight ? this.x + 14 : this.x - 6; 
+            let gunY = this.y + 14;
+            ctx.fillRect(gunX, gunY, 16, 6);
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 30;
+            this.vx = 2;
+            this.dir = 1;
+            this.timer = 0;
+            this.state = 'walk';
+            this.startX = x;
+        }
+
+        update() {
+            this.timer++;
+            
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                // Patrulla 200px
+                if (Math.abs(this.x - this.startX) > 150) {
+                    this.state = 'wait';
+                    this.waitTimer = 60;
+                }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) {
+                    this.dir *= -1;
+                    this.vx = this.dir * 2;
+                    this.state = 'walk';
+                }
+            }
+        }
+
+        draw(ctx) {
+            // --- CÓDIGO DE DIBUJO EXTRAÍDO DE Enemy.draw (type='walker') ---
+            ctx.fillStyle = ENEMY_COLOR;
+            let anim = Math.sin(this.timer * 0.2);
+            let drawY = this.y - 10; 
+            
+            ctx.fillRect(this.x, drawY, this.width, this.height);
+            // Ojo
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x + 10, drawY + 5, 10, 10); 
+            ctx.fillStyle = '#f00'; ctx.fillRect(this.x + 13, drawY + 8, 4, 4);
+            
+            // Brazos rotatorios
+            ctx.fillStyle = ENEMY_COLOR; 
+            ctx.save(); ctx.translate(this.x + 5, drawY + 15); ctx.rotate(anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.save(); ctx.translate(this.x + 25, drawY + 15); ctx.rotate(-anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            
+            // Piernas
+            ctx.fillRect(this.x + 5, drawY + 30, 5, 10 + anim * 5); 
+            ctx.fillRect(this.x + 20, drawY + 30, 5, 10 - anim * 5);
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 20; // Tamaño strafe_flyer
+            this.startX = x;
+            this.timer = 0;
+        }
+
+        update() {
+            this.timer++;
+            // Vuelo en onda sinusoidal
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1; 
+        }
+
+        draw(ctx) {
+            // --- CÓDIGO DE DIBUJO EXTRAÍDO DE Enemy.draw (type='strafe_flyer') ---
+            let flap = Math.sin(this.timer * 0.8) * 10;
+            
+            // Cuerpo
+            ctx.fillStyle = ENEMY_COLOR;
+            ctx.fillRect(this.x, this.y, 30, 20); 
+            
+            // Alas
+            ctx.fillStyle = '#777'; 
+            ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(this.x - 10, this.y - 10 + flap); ctx.lineTo(this.x + 10, this.y); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(this.x + 30, this.y); ctx.lineTo(this.x + 40, this.y - 10 + flap); ctx.lineTo(this.x + 20, this.y); ctx.fill(); 
+            
+            // Motor
+            ctx.fillStyle = '#ff0'; ctx.fillRect(this.x + 10, this.y + 5, 10, 5);
+        }
+    }
+
+    // --- GENERACIÓN DEL ESCENARIO ---
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450); // En plataforma elevada
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200 }, // Suelo Jugador
+        { x: 750, y: 490, width: 400, height: 20 }  // Plataforma Enemigo
+    ];
+
+    // --- FUNCIÓN DE FONDO (COPIADA DE ORIGEN) ---
+    function drawBackground(ctx, cameraX, cameraY) {
+        ctx.fillStyle = currentBiome.sky; 
+        ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.restore();
+        
+        const layers = [
+            { speed: 0.05, color: currentBiome.layers[0], heightMod: 500, width: 100, gap: 0 }, 
+            { speed: 0.15, color: currentBiome.layers[1], heightMod: 350, width: 150, gap: 5 }, 
+            { speed: 0.30, color: currentBiome.layers[2], heightMod: 250, width: 200, gap: 10 }, 
+            { speed: 0.60, color: currentBiome.layers[3], heightMod: 50, width: 250, gap: 20 }
+        ];
+        
+        layers.forEach((layer, index) => {
+            ctx.save(); 
+            let parallaxX = -cameraX * layer.speed; 
+            let parallaxY = -cameraY * (layer.speed * 0.5); 
+            ctx.translate(parallaxX, parallaxY);
+            
+            let totalW = layer.width + layer.gap; 
+            // Ajustamos el rango de renderizado para que el bucle sea infinito visualmente
+            let startI = Math.floor(-parallaxX / totalW) - 2; 
+            let endI = startI + Math.ceil(GAME_WIDTH / totalW) + 5;
+            
+            for (let i = startI; i < endI; i++) {
+                let pseudoRandom = Math.sin(i * 134.5 + index * 12.1); 
+                let h = layer.heightMod + (pseudoRandom * 150 + 100); 
+                let x = i * totalW; 
+                let y = GAME_HEIGHT - h;
+                
+                ctx.fillStyle = layer.color; 
+                ctx.fillRect(x, y, layer.width, h + 1000);
+                
+                // Ventanas
+                if (Math.abs(pseudoRandom) > 0.3) {
+                    let wins = Math.abs(Math.floor(pseudoRandom * 5)) + 1;
+                    for (let w = 0; w < wins; w++) {
+                        for (let wh = 0; wh < 12; wh++) {
+                            if ((i + wh) % 3 === 0) continue; 
+                            let winState = Math.sin(i * 45.5 + w * 12.1 + wh * 6.7);
+                            if (winState > 0.4) { 
+                                if (winState > 0.8) ctx.fillStyle = '#fff75c'; 
+                                else if (winState > 0.65) ctx.fillStyle = '#ccffff'; 
+                                else ctx.fillStyle = '#aa8866'; 
+                            } else { ctx.fillStyle = '#050505'; }
+                            ctx.fillRect(x + 10 + w * 20, y + 50 + wh * 40, 8, 18);
+                        }
+                    }
+                }
+                ctx.fillStyle = layer.color;
+            }
+            ctx.restore();
+        });
+    }
+
+    function drawMap(ctx) {
+        platforms.forEach(p => {
+            ctx.fillStyle = currentBiome.ground; 
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+            ctx.fillStyle = currentBiome.top; 
+            ctx.fillRect(p.x, p.y, p.width, 10);
+            
+            // Decoración
+            ctx.fillStyle = '#000';
+            if (p.height > p.width) { 
+                for (let i = 20; i < p.height; i += 60) ctx.fillRect(p.x + 10, p.y + i, 8, 8); 
+            } else { 
+                for (let i = 20; i < p.width; i += 60) ctx.fillRect(p.x + i, p.y + 20, 8, 8); 
+            }
+        });
+    }
+
+    // --- BUCLE PRINCIPAL ---
+    function loop() {
+        gameTime++;
+        
+        // Simular movimiento de cámara suave para ver el parallax
+        camera.x = Math.sin(gameTime * 0.01) * 200;
+        
+        // Actualizar entidades
+        player.update();
+        walker.update();
+        flyer.update();
+
+        // Renderizar
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Fondo con parallax
+        drawBackground(ctx, camera.x, camera.y);
+        
+        // Aplicar cámara a los objetos del juego
+        ctx.save();
+        // Centrar verticalmente un poco, mover x según cámara
+        ctx.translate(-camera.x + 200, 0); 
+
+        drawMap(ctx);
+        
+        // Dibujar Entidades
+        // Ajustamos posiciones relativas a la cámara para que no se vayan de pantalla inmediatamente
+        // En este test, hacemos que las entidades sigan a la cámara para que siempre estén visibles
+        ctx.save();
+        ctx.translate(camera.x - 200, 0); // Truco para que las entidades se dibujen fijas en pantalla en este demo
+            // NOTA: Como pediste que caminen, las dibujamos con sus coordenadas X reales, 
+            // pero ajustaremos sus coordenadas en el update para que no se pierdan.
+        ctx.restore();
+
+        // Dibujamos las entidades en sus coordenadas "mundo", pero como la cámara se mueve
+        // vamos a reposicionar las entidades en el mundo para que acompañen la cámara y se vean siempre.
+        
+        let screenOffsetX = camera.x;
+        
+        ctx.save();
+        // Dibujamos al jugador relativo a la pantalla para verlo siempre
+        ctx.translate(screenOffsetX, 0); 
+            // Le restamos el offset a la X interna para simular que está en el mundo
+            // Esto es un truco visual para el testbed:
+            // Fondo se mueve <- | Entidades se mueven localmente ->
+        
+        // Hack visual para el testbed: 
+        // Queremos ver el parallax moverse, pero mantener a los personajes en vista.
+        // Dibujamos el mapa y personajes estáticos respecto a la pantalla, pero usamos camera.x para el fondo.
+        ctx.restore();
+        
+        // RE-DIBUJAR MAPA Y PERSONAJES FIJOS EN PANTALLA (Para facilitar el diseño)
+        // Solo el fondo se mueve con camera.x.
+        drawMap(ctx);
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+        
+        ctx.restore();
+
+        requestAnimationFrame(loop);
+    }
+
+    // Iniciar
+    loop();
+
+</script>
+</body>
+</html>

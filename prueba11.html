@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Ethereal Testbed</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050010; /* Fondo muy oscuro, casi negro-púrpura */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            /* Sombra violeta suave */
+            box-shadow: 0 0 60px rgba(100, 0, 255, 0.3); 
+            border: 1px solid #331155;
+            background: #0a001a;
+            width: 1280px;
+            height: 720px;
+            border-radius: 8px; /* Bordes suaves para el contenedor */
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        /* UI Minimalista y limpia */
+        #ui-layer {
+            position: absolute; top: 20px; left: 30px; 
+            color: #e0ccff; 
+            z-index: 20;
+            font-weight: 300;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            text-shadow: 0 0 10px #bd00ff;
+            pointer-events: none;
+        }
+        h3 { margin: 0; font-size: 14px; opacity: 0.7; }
+        p { margin: 5px 0 0 0; font-size: 24px; font-weight: 600; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="testCanvas"></canvas>
+    <div id="ui-layer">
+        <h3>Biome simulation</h3>
+        <p>Crystal Forest</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- PALETA DE COLORES ETÉREA ---
+    const PALETTE = {
+        bgTop: '#0f0524',      // Cielo profundo
+        bgBottom: '#2a0e45',   // Horizonte púrpura
+        terrain: '#150526',    // Tierra oscura
+        grass: '#bd00ff',      // Hierba neón (magenta)
+        playerCore: '#00f3ff', // Jugador Cyan
+        enemyCore: '#ff9100',  // Enemigos Naranja fuego
+        spores: '#ff00de'      // Partículas rosa
+    };
+
+    // --- VARIABLES DE SIMULACIÓN ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+
+    // --- SISTEMA DE PARTÍCULAS (ESPORAS FLOTANTES) ---
+    class SporeSystem {
+        constructor(count) {
+            this.particles = [];
+            for(let i=0; i<count; i++) {
+                this.particles.push({
+                    x: Math.random() * GAME_WIDTH,
+                    y: Math.random() * GAME_HEIGHT,
+                    vx: (Math.random() - 0.5) * 0.5,
+                    vy: -(Math.random() * 0.5 + 0.2), // Flotan hacia arriba
+                    size: Math.random() * 3,
+                    alpha: Math.random()
+                });
+            }
+        }
+        updateAndDraw(ctx) {
+            ctx.fillStyle = PALETTE.spores;
+            this.particles.forEach(p => {
+                p.x += p.vx;
+                p.y += p.vy;
+                p.alpha -= 0.002;
+
+                // Reset
+                if (p.y < -10 || p.alpha <= 0) {
+                    p.y = GAME_HEIGHT + 10;
+                    p.x = Math.random() * GAME_WIDTH;
+                    p.alpha = 1;
+                    p.vx = (Math.random() - 0.5) * 0.5;
+                }
+
+                ctx.globalAlpha = p.alpha * 0.6;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI*2);
+                ctx.fill();
+            });
+            ctx.globalAlpha = 1.0;
+        }
+    }
+    const spores = new SporeSystem(150);
+
+    // --- CLASES MOCK (Lógica igual, visuales mágicos) ---
+
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 24; this.height = 40;
+            this.vx = 0; this.animTimer = 0; this.facingRight = true;
+            this.state = 'wait'; this.stateTimer = 0;
+        }
+        update() {
+            this.animTimer++;
+            this.stateTimer++;
+            // IA Simple igual que antes
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { 
+                    this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left';
+                    this.stateTimer = 0;
+                }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3; this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3; this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) this.x = 100;
+            if(this.x > 600) this.x = 600;
+        }
+        draw(ctx) {
+            // ESTÉTICA: Ser de Energía Mística (Sin armadura, solo luz)
+            const centerX = this.x + this.width/2;
+            const centerY = this.y + this.height/2;
+            const float = Math.sin(this.animTimer * 0.1) * 2;
+            
+            ctx.save();
+            
+            // Efecto de rastro/aura
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = PALETTE.playerCore;
+            
+            // Cuerpo principal (Cápsula de luz)
+            ctx.fillStyle = '#fff'; // Núcleo blanco caliente
+            
+            // Dibujar silueta fluida
+            ctx.beginPath();
+            // Cabeza
+            ctx.arc(centerX, this.y + 8 + float, 8, 0, Math.PI*2);
+            // Torso que se estrecha
+            ctx.moveTo(centerX - 6, this.y + 12 + float);
+            ctx.lineTo(centerX + 6, this.y + 12 + float);
+            ctx.lineTo(centerX + 2, this.y + 35 + float);
+            ctx.lineTo(centerX - 2, this.y + 35 + float);
+            ctx.fill();
+            
+            // "Bufanda" o Estela de energía
+            ctx.strokeStyle = PALETTE.playerCore;
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            let trailDir = this.facingRight ? -1 : 1;
+            ctx.moveTo(centerX, this.y + 10 + float);
+            // Curva de Bezier animada para la tela/energía
+            let wave = Math.sin(this.animTimer * 0.3) * 5;
+            ctx.quadraticCurveTo(
+                centerX + (15 * trailDir), this.y + 5 + float, 
+                centerX + (25 * trailDir) + wave, this.y + 15 + float + wave
+            );
+            ctx.stroke();
+
+            // Ojos brillantes (Silueta negativa)
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = '#000';
+            let eyeX = this.facingRight ? centerX + 2 : centerX - 6;
+            ctx.fillRect(eyeX, this.y + 6 + float, 4, 2);
+
+            // Arma: Orbe flotante orbitando la mano
+            ctx.fillStyle = PALETTE.playerCore;
+            ctx.shadowBlur = 10; 
+            ctx.shadowColor = PALETTE.playerCore;
+            let handX = this.facingRight ? centerX + 10 : centerX - 10;
+            let handY = this.y + 20 + float;
+            ctx.beginPath();
+            ctx.arc(handX, handY, 4, 0, Math.PI*2);
+            ctx.fill();
+
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 30;
+            this.vx = 2; this.dir = 1; this.timer = 0; this.state = 'walk'; this.startX = x; this.waitTimer = 0;
+        }
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) { this.state = 'wait'; this.waitTimer = 60; }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) { this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk'; }
+            }
+        }
+        draw(ctx) {
+            // ESTÉTICA: Bestia de Sombra con Cristales
+            let bounce = Math.abs(Math.sin(this.timer * 0.2)) * 5;
+            let drawY = this.y + 30 - bounce; // Rebota desde el suelo
+            let cx = this.x + 15;
+
+            ctx.save();
+            
+            // Cuerpo (Sombra amorfa redonda)
+            ctx.fillStyle = '#1a0510'; // Muy oscuro rojizo
+            ctx.beginPath();
+            ctx.arc(cx, drawY - 15, 15, 0, Math.PI*2);
+            ctx.fill();
+
+            // Cristales en la espalda (Púas)
+            ctx.fillStyle = PALETTE.enemyCore;
+            ctx.shadowBlur = 15; ctx.shadowColor = PALETTE.enemyCore;
+            
+            // Púa 1
+            ctx.beginPath();
+            ctx.moveTo(cx - 10, drawY - 20);
+            ctx.lineTo(cx - 15, drawY - 35);
+            ctx.lineTo(cx - 5, drawY - 25);
+            ctx.fill();
+            // Púa 2
+            ctx.beginPath();
+            ctx.moveTo(cx + 5, drawY - 25);
+            ctx.lineTo(cx + 15, drawY - 35);
+            ctx.lineTo(cx + 10, drawY - 20);
+            ctx.fill();
+
+            // Ojo único brillante
+            ctx.fillStyle = '#fff';
+            ctx.shadowBlur = 20;
+            ctx.beginPath();
+            ctx.arc(cx, drawY - 15, 5, 0, Math.PI*2);
+            ctx.fill();
+            
+            ctx.restore();
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 20;
+            this.startX = x; this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1; 
+        }
+        draw(ctx) {
+            // ESTÉTICA: Medusa Etérea
+            let pulse = 1 + Math.sin(this.timer * 0.1) * 0.1;
+            
+            ctx.save();
+            ctx.translate(this.x + 15, this.y + 10);
+            ctx.scale(pulse, pulse);
+
+            // Cabeza translúcida
+            ctx.fillStyle = 'rgba(0, 243, 255, 0.4)';
+            ctx.shadowColor = PALETTE.playerCore; ctx.shadowBlur = 15;
+            ctx.beginPath();
+            ctx.arc(0, -5, 15, Math.PI, 0); // Semicírculo arriba
+            ctx.bezierCurveTo(15, 5, -15, 5, -15, -5); // Cerrar abajo suave
+            ctx.fill();
+
+            // Tentáculos colgando
+            ctx.strokeStyle = 'rgba(0, 243, 255, 0.6)';
+            ctx.lineWidth = 2;
+            ctx.shadowBlur = 5;
+            for(let i=-10; i<=10; i+=5) {
+                ctx.beginPath();
+                ctx.moveTo(i, 5);
+                let sway = Math.sin(this.timer * 0.1 + i) * 5;
+                ctx.quadraticCurveTo(i + sway, 15, i, 25);
+                ctx.stroke();
+            }
+            ctx.restore();
+        }
+    }
+
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450);
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200 }, 
+        { x: 750, y: 490, width: 400, height: 20 }
+    ];
+
+    // --- FONDO ORGÁNICO (Colinas en lugar de edificios) ---
+    function drawBackground(ctx, cameraX, cameraY) {
+        // Gradiente de Cielo Místico
+        let grad = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        grad.addColorStop(0, PALETTE.bgTop);
+        grad.addColorStop(1, PALETTE.bgBottom);
+        ctx.fillStyle = grad;
+        
+        ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.restore();
+
+        // Capas de terreno alienígena (Curvas Sine)
+        // Cada capa es más clara y definida a medida que se acerca
+        const layers = [
+            { speed: 0.1, color: '#1e0a36', yOff: 300, amp: 100, freq: 0.002 },
+            { speed: 0.2, color: '#2a0e4a', yOff: 200, amp: 80, freq: 0.005 },
+            { speed: 0.4, color: '#381261', yOff: 100, amp: 60, freq: 0.008 },
+            { speed: 0.6, color: '#431f7c', yOff: -50, amp: 40, freq: 0.01 } // Capa cercana
+        ];
+
+        layers.forEach((layer, index) => {
+            ctx.save();
+            // Desplazamiento
+            ctx.translate(-cameraX * layer.speed, 0);
+            
+            ctx.fillStyle = layer.color;
+            ctx.beginPath();
+            
+            // Dibujar onda continua para el terreno
+            let startX = cameraX * layer.speed; // Donde empieza la pantalla en coordenadas mundo
+            let endX = startX + GAME_WIDTH;
+            
+            // Renderizamos un poco más ancho para evitar cortes
+            ctx.moveTo(startX - 100, GAME_HEIGHT);
+            
+            for (let x = startX - 100; x <= endX + 100; x += 20) {
+                // Fórmula para colinas suaves
+                let y = GAME_HEIGHT - layer.yOff - Math.sin(x * layer.freq) * layer.amp;
+                // Añadir detalle fractal pequeño
+                y -= Math.sin(x * layer.freq * 5) * (layer.amp * 0.2);
+                ctx.lineTo(x, y);
+                
+                // Árboles/Flora alienígena en las crestas
+                // Solo dibujamos si estamos en una "cima" (derivada cercana a 0 y alta)
+                if (Math.sin(x * layer.freq) > 0.95 && index > 1) {
+                    // Dibujar flora simple (silueta)
+                    let treeH = 40 + (index * 10);
+                    ctx.lineTo(x, y - treeH); // Tronco arriba
+                    ctx.arc(x, y - treeH, 15 + index*2, 0, Math.PI*2); // Copa redonda
+                    ctx.lineTo(x, y); // Volver abajo
+                }
+            }
+            
+            ctx.lineTo(endX + 100, GAME_HEIGHT);
+            ctx.fill();
+            ctx.restore();
+        });
+    }
+
+    function drawOrganicPlatform(ctx, x, y, w, h) {
+        // Relleno Oscuro (Suelo)
+        ctx.fillStyle = PALETTE.terrain;
+        
+        // Dibujamos el bloque base pero con esquinas ligeramente redondeadas para suavidad
+        ctx.beginPath();
+        ctx.roundRect(x, y, w, h, 10);
+        ctx.fill();
+        
+        // Borde superior Brillante (Hierba Alienígena)
+        ctx.fillStyle = PALETTE.grass;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = PALETTE.grass;
+        
+        // Capa superior de hierba/musgo
+        ctx.beginPath();
+        ctx.roundRect(x - 2, y - 5, w + 4, 10, 5);
+        ctx.fill();
+        
+        // Detalles: Flores brillantes o cristales sobre la plataforma
+        // Usamos la posición X para "aleatorizar" proceduralmente dónde salen las flores
+        ctx.shadowBlur = 10;
+        ctx.fillStyle = '#fff'; // Centro flor
+        for(let i=20; i<w; i+=50) {
+            // Pseudo-random basado en posición
+            if (Math.sin(x + i) > 0.5) {
+                let florY = y - 5;
+                ctx.beginPath();
+                ctx.arc(x + i, florY, 3, 0, Math.PI*2);
+                ctx.fill();
+                // Tallo fino
+                ctx.strokeStyle = PALETTE.grass;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(x+i, y);
+                ctx.lineTo(x+i, florY);
+                ctx.stroke();
+            }
+        }
+        ctx.shadowBlur = 0;
+    }
+
+    function drawMap(ctx) {
+        platforms.forEach(p => {
+            drawOrganicPlatform(ctx, p.x, p.y, p.width, p.height);
+        });
+    }
+
+    // --- BUCLE PRINCIPAL ---
+    function loop() {
+        gameTime++;
+        
+        // Cámara flotante suave
+        camera.x = Math.sin(gameTime * 0.002) * 300 + 300;
+        camera.y = Math.sin(gameTime * 0.005) * 20;
+
+        player.update();
+        walker.update();
+        flyer.update();
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 1. Fondo
+        drawBackground(ctx, camera.x, camera.y);
+        
+        // 2. Partículas de fondo (detrás de plataformas)
+        spores.updateAndDraw(ctx);
+
+        // 3. Mundo de Juego
+        ctx.save();
+        let screenOffsetX = -camera.x + 300; 
+        let screenOffsetY = -camera.y;
+        ctx.translate(screenOffsetX, screenOffsetY);
+
+        drawMap(ctx);
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+
+        ctx.restore();
+
+        // 4. Viñeta suave para centrar la atención (Efecto cine)
+        let gradient = ctx.createRadialGradient(GAME_WIDTH/2, GAME_HEIGHT/2, GAME_HEIGHT/3, GAME_WIDTH/2, GAME_HEIGHT/2, GAME_HEIGHT);
+        gradient.addColorStop(0, 'rgba(0,0,0,0)');
+        gradient.addColorStop(1, 'rgba(10,0,30,0.6)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0,0,GAME_WIDTH, GAME_HEIGHT);
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>

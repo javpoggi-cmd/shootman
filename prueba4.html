@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Modern Design Testbed</title>
+    <style>
+        /* ESTILOS ACTUALIZADOS PARA UN LOOK MÁS MODERNO */
+        body {
+            margin: 0;
+            padding: 0;
+            background: radial-gradient(circle at center, #1a1a2e 0%, #000000 100%); /* Fondo más rico */
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; /* Fuente más moderna */
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 50px rgba(0, 150, 255, 0.3), 0 0 20px rgba(0, 0, 0, 0.8); /* Brillo exterior moderno */
+            border: 2px solid #334455;
+            background: #000;
+            width: 1280px;
+            height: 720px;
+            border-radius: 4px; /* Bordes ligeramente redondeados */
+        }
+        canvas {
+            display: block;
+            background-color: #050508;
+            /* image-rendering: pixelated;  <- ELIMINADO PARA GRÁFICOS SUAVES MODERNOS */
+            width: 100%;
+            height: 100%;
+        }
+        /* Scanlines siles para textura, menos agresivas que el retro */
+        #scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.1) 0px,
+                rgba(0, 0, 0, 0.1) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+            z-index: 10;
+            opacity: 0.5;
+        }
+        #debug-ui {
+            position: absolute; top: 15px; left: 15px; color: #00ddee; z-index: 20;
+            background: rgba(0, 20, 40, 0.8); padding: 15px;
+            border-left: 3px solid #00ddee;
+            box-shadow: 2px 2px 10px rgba(0,0,0,0.5);
+            border-radius: 0 4px 4px 0;
+        }
+        h3 { margin: 0 0 10px 0; font-weight: 300; letter-spacing: 1px; }
+        p { margin: 5px 0; font-size: 0.9em; color: #aaccff; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="testCanvas"></canvas>
+    <div id="scanlines"></div>
+    <div id="debug-ui">
+        <h3>DISEÑO: NEXT-GEN</h3>
+        <p>Bioma: NEON METROPOLIS</p>
+        <p>Capas Parallax: 5 (Activas)</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- NUEVA CONFIGURACIÓN DE COLORES (MODERNA / CYBERPUNK) ---
+    const COLORS = { 
+        playerPrimary: '#2a2a35',   // Traje oscuro
+        playerSecondary: '#00aaff', // Acentos de luz cian
+        playerEmissive: '#ffea00',  // Visor brillante
+        enemyWalker: '#c0392b',     // Rojo metálico oscuro
+        enemyFlyer: '#d35400',      // Naranja quemado
+        neonPink: '#ff00cc',
+        neonBlue: '#00eeff',
+        metalDark: '#15151a',
+        metalLight: '#3a3a45'
+    };
+    
+    // NUEVO BIOMA: NEON METROPOLIS (5 CAPAS)
+    const currentBiome = { 
+        name: "NEON METROPOLIS", 
+        skyTop: '#020205', 
+        skyBottom: '#120a26', // Gradiente de cielo nocturno
+        // Definimos colores base para los gradientes de las capas
+        layersConfig: [
+            { colorStart: '#0a0a12', colorEnd: '#151020', speed: 0.02, baseHeight: 600, detail: 'skyline' }, // Capa 1 (Más lejana)
+            { colorStart: '#10101a', colorEnd: '#1d182b', speed: 0.10, baseHeight: 450, detail: 'megatowers' }, // Capa 2
+            { colorStart: '#161625', colorEnd: '#28203d', speed: 0.25, baseHeight: 300, detail: 'buildings_high' }, // Capa 3
+            { colorStart: '#1e1e30', colorEnd: '#322a4f', speed: 0.50, baseHeight: 150, detail: 'buildings_mid' }, // Capa 4
+            { colorStart: '#25253a', colorEnd: '#403560', speed: 0.85, baseHeight: -50, detail: 'foreground_structs' } // Capa 5 (Nueva, más cercana)
+        ],
+    };
+
+    // Helpers gráficos para efectos modernos
+    function createMetalGradient(ctx, x, y, height, darkColor, lightColor) {
+        let grd = ctx.createLinearGradient(x, y, x, y + height);
+        grd.addColorStop(0, lightColor);
+        grd.addColorStop(0.5, darkColor);
+        grd.addColorStop(1, lightColor);
+        return grd;
+    }
+
+    function setGlow(ctx, color, blur = 10) {
+        ctx.shadowColor = color;
+        ctx.shadowBlur = blur;
+    }
+
+    function resetGlow(ctx) {
+        ctx.shadowColor = 'transparent';
+        ctx.shadowBlur = 0;
+    }
+    
+    // --- VARIABLES DE SIMULACIÓN ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+    
+    // --- CLASES SIMULADAS REDISEÑADAS ---
+
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 24; this.height = 40; // TAMAÑO ORIGINAL RESPETADO
+            this.vx = 0; this.animTimer = 0; this.facingRight = true;
+            this.state = 'wait'; this.stateTimer = 0;
+        }
+
+        update() {
+            this.animTimer++; this.stateTimer++;
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3; this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3; this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+        }
+
+        draw(ctx) {
+            // --- REDISEÑO DEL JUGADOR: MERCENARIO CYBERPUNK ---
+            ctx.save();
+            let lean = 0; if (Math.abs(this.vx) > 1) lean = this.facingRight ? 2 : -2; 
+            ctx.translate(this.x + lean, this.y);
+            
+            // Sombra del personaje en el suelo
+            ctx.fillStyle = 'rgba(0,0,0,0.4)';
+            ctx.beginPath(); ctx.ellipse(12, 40, 10, 3, 0, 0, Math.PI * 2); ctx.fill();
+
+            // Cuerpo Base (Armadura oscura)
+            ctx.fillStyle = COLORS.playerPrimary;
+            ctx.fillRect(2, 8, 20, 22); // Torso
+            
+            // Piernas con gradiente para volumen
+            let legGrad = ctx.createLinearGradient(0, 30, 0, 40);
+            legGrad.addColorStop(0, COLORS.playerPrimary); legGrad.addColorStop(1, '#111');
+            ctx.fillStyle = legGrad;
+            if (Math.abs(this.vx) > 0.5) {
+                let cycle = Math.sin(this.animTimer * 0.5);
+                ctx.fillRect(4, 30, 6, 10 + cycle * 2); ctx.fillRect(14, 30, 6, 10 - cycle * 2);
+            } else { 
+                ctx.fillRect(4, 30, 6, 10); ctx.fillRect(14, 30, 6, 10); 
+            }
+
+            // Casco y Visor (Con efecto de brillo)
+            ctx.fillStyle = COLORS.metalLight;
+            ctx.fillRect(2, 0, 20, 10); // Casco base
+            
+            setGlow(ctx, COLORS.playerEmissive, 10);
+            ctx.fillStyle = COLORS.playerEmissive;
+            // Visor dinámico según dirección
+            let visorX = this.facingRight ? 12 : 4;
+            ctx.fillRect(visorX, 3, 10, 3); 
+            resetGlow(ctx);
+
+            // Detalles de Armadura (Acentos de neón azul)
+            ctx.fillStyle = COLORS.playerSecondary;
+            ctx.fillRect(this.facingRight ? 0 : 20, 10, 4, 12); // Mochila/Batería
+            // Pequeños puntos de luz en el traje
+            ctx.fillRect(6, 15, 2, 2); ctx.fillRect(16, 15, 2, 2);
+
+            // Arma (Diseño más futurista)
+            let gunX = this.facingRight ? 16 : -8;
+            ctx.fillStyle = COLORS.metalDark;
+            ctx.fillRect(gunX, 16, 16, 5); // Cuerpo arma
+            ctx.fillStyle = COLORS.playerSecondary;
+            ctx.fillRect(this.facingRight ? gunX + 14 : gunX, 17, 2, 3); // Boquilla brillante
+
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 30; // TAMAÑO ORIGINAL RESPETADO
+            this.vx = 1.5; this.dir = 1; this.timer = 0;
+            this.state = 'walk'; this.startX = x; this.waitTimer = 0;
+        }
+
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) { this.state = 'wait'; this.waitTimer = 60; }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) { this.dir *= -1; this.vx = this.dir * 1.5; this.state = 'walk'; }
+            }
+        }
+
+        draw(ctx) {
+            // --- REDISEÑO WALKER: SENTRY DRONE PESADO ---
+            let drawX = this.x; let drawY = this.y;
+            let anim = Math.sin(this.timer * 0.15);
+
+            ctx.save();
+            ctx.translate(drawX, drawY);
+
+            // Cuerpo Principal (Metal rojizo con gradiente)
+            let bodyGrad = createMetalGradient(ctx, 0, 0, 20, COLORS.enemyWalker, '#5c2018');
+            ctx.fillStyle = bodyGrad;
+            
+            // Forma del cuerpo más angular
+            ctx.beginPath();
+            ctx.moveTo(0, 5); ctx.lineTo(5, 0); ctx.lineTo(25, 0); ctx.lineTo(30, 5);
+            ctx.lineTo(30, 15); ctx.lineTo(25, 22); ctx.lineTo(5, 22); ctx.lineTo(0, 15);
+            ctx.closePath(); ctx.fill();
+
+            // Ojo Central (Brillo rojo intenso con 'lens flare' simulado)
+            let eyeX = this.dir > 0 ? 20 : 10;
+            setGlow(ctx, '#ff0000', 15);
+            ctx.fillStyle = '#ffcccc';
+            ctx.beginPath(); ctx.arc(eyeX, 10, 4, 0, Math.PI*2); ctx.fill();
+            // Anillo exterior del ojo
+            ctx.strokeStyle = '#ff0000'; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.arc(eyeX, 10, 7 + Math.sin(this.timer*0.5)*1, 0, Math.PI*2); ctx.stroke();
+            resetGlow(ctx);
+            
+            // Patas Mecánicas (Articuladas)
+            ctx.fillStyle = COLORS.metalDark;
+            let legOffset = anim * 3;
+            // Pata delantera
+            ctx.beginPath();
+            ctx.moveTo(5, 20); ctx.lineTo(0 - legOffset, 30); ctx.lineTo(5 - legOffset, 30); ctx.lineTo(10, 22);
+            ctx.fill();
+            // Pata trasera
+            ctx.beginPath();
+            ctx.moveTo(25, 20); ctx.lineTo(30 + legOffset, 30); ctx.lineTo(25 + legOffset, 30); ctx.lineTo(20, 22);
+            ctx.fill();
+
+            ctx.restore();
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 20; // TAMAÑO ORIGINAL RESPETADO
+            this.startX = x; this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.04) * 1.5; 
+        }
+
+        draw(ctx) {
+            // --- REDISEÑO FLYER: DRON DE VIGILANCIA AÉREA ---
+            let drawX = this.x; let drawY = this.y;
+            let hover = Math.sin(this.timer * 0.2) * 2;
+
+            ctx.save();
+            ctx.translate(drawX, drawY + hover);
+
+            // Propulsores (Brillo naranja/amarillo en la parte inferior)
+            setGlow(ctx, '#ffaa00', 10);
+            ctx.fillStyle = '#ffff00';
+            ctx.fillRect(2, 15, 8, 4 + Math.random()*3); // Propulsor Izq
+            ctx.fillRect(20, 15, 8, 4 + Math.random()*3); // Propulsor Der
+            resetGlow(ctx);
+
+            // Chasis Principal (Metal naranja/bronce)
+            let bodyGrad = createMetalGradient(ctx, 0, 5, 10, COLORS.enemyFlyer, '#a04000');
+            ctx.fillStyle = bodyGrad;
+            // Forma aerodinámica
+            ctx.beginPath();
+            ctx.moveTo(0, 10); ctx.lineTo(5, 5); ctx.lineTo(25, 5); ctx.lineTo(30, 10); // Top
+            ctx.lineTo(28, 18); ctx.lineTo(2, 18); // Bottom
+            ctx.closePath(); ctx.fill();
+
+            // Detalles Superiores (Sensores)
+            ctx.fillStyle = COLORS.metalDark;
+            ctx.fillRect(10, 2, 10, 4);
+            // Luces de navegación
+            ctx.fillStyle = this.timer % 60 < 30 ? '#ff0000' : '#000'; // Parpadeo rojo
+            ctx.fillRect(2, 8, 3, 3);
+            ctx.fillStyle = this.timer % 60 > 30 ? '#00ff00' : '#000'; // Parpadeo verde
+            ctx.fillRect(25, 8, 3, 3);
+
+            ctx.restore();
+        }
+    }
+
+    // --- GENERACIÓN DEL ESCENARIO ---
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450);
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200 },
+        { x: 750, y: 490, width: 400, height: 20 }
+    ];
+
+    // --- NUEVA FUNCIÓN DE FONDO (5 CAPAS, DETALLADA) ---
+    function drawBackground(ctx, cameraX, cameraY) {
+        // Cielo con gradiente vertical
+        let skyGrad = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        skyGrad.addColorStop(0, currentBiome.skyTop);
+        skyGrad.addColorStop(1, currentBiome.skyBottom);
+        ctx.fillStyle = skyGrad;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Dibujar capas de parallax
+        currentBiome.layersConfig.forEach((layer, index) => {
+            ctx.save();
+            // Velocidad de parallax y offset vertical
+            let parallaxX = -cameraX * layer.speed;
+            let parallaxY = -cameraY * (layer.speed * 0.3) + layer.baseHeight;
+            ctx.translate(parallaxX, parallaxY);
+
+            // Crear gradiente para la silueta de la ciudad de esta capa
+            // Usamos un gradiente muy alto para que cubra toda la parte inferior
+            let cityGrad = ctx.createLinearGradient(0, 0, 0, 1000);
+            cityGrad.addColorStop(0, layer.colorStart);
+            cityGrad.addColorStop(1, layer.colorEnd);
+            ctx.fillStyle = cityGrad;
+
+            // Generación procedural determinista de edificios
+            // Usamos el índice de la capa para variar la "semilla"
+            const segmentWidth = 100 + index * 50; 
+            const startI = Math.floor(-parallaxX / segmentWidth) - 1;
+            const endI = startI + Math.ceil(GAME_WIDTH / segmentWidth) + 3;
+
+            ctx.beginPath();
+            ctx.moveTo(startI * segmentWidth, GAME_HEIGHT); // Empezar abajo
+
+            for (let i = startI; i <= endI; i++) {
+                let x = i * segmentWidth;
+                // Funciones seno/coseno combinadas para generar alturas de edificios variadas pero consistentes
+                let hNoise = Math.sin(i * 0.5 + index) * Math.cos(i * 0.2 + index * 2);
+                let height = 150 + hNoise * 100 + index * 40;
+                
+                // Dibujar el contorno del edificio
+                ctx.lineTo(x, -height);
+                ctx.lineTo(x + segmentWidth, -height);
+
+                // --- Detalles de Neón en los edificios ---
+                // Solo dibujamos detalles si la capa no es la más lejana (índice 0) para ahorrar rendimiento
+                if (index > 0) {
+                    ctx.save();
+                    // Decidir color de neón para esta "manzana" de edificios
+                    let neonColor = (i + index) % 3 === 0 ? COLORS.neonPink : ((i+index)%2===0 ? COLORS.neonBlue : '#8800ff');
+                    ctx.fillStyle = neonColor;
+                    ctx.globalAlpha = 0.2 + index * 0.15; // Más brillo en capas cercanas
+
+                    // Ventanas/Líneas de neón verticales
+                    if (Math.abs(hNoise) > 0.2) {
+                       for(let n = 1; n < 4; n++) {
+                           ctx.fillRect(x + n*(segmentWidth/4), -height + 20, 2, height - 50);
+                       }
+                    }
+                    // Líneas horizontales (tipo carreteras elevadas) en capas medias
+                    if (index === 2 || index === 3) {
+                         ctx.shadowColor = neonColor; ctx.shadowBlur = 10; ctx.globalAlpha = 0.8;
+                         ctx.fillRect(x, -height + height*0.6, segmentWidth, 4);
+                         resetGlow(ctx);
+                    }
+                    ctx.restore();
+                }
+            }
+            ctx.lineTo(endI * segmentWidth + segmentWidth, GAME_HEIGHT); // Terminar abajo
+            ctx.closePath();
+            ctx.fill(); // Rellenar la silueta principal con el gradiente
+
+            // --- Efectos Atmosféricos en capas lejanas ---
+            if (index < 2) {
+                // Niebla brillante en la base de los edificios lejanos
+                let fogGrad = ctx.createLinearGradient(0, -100, 0, 200);
+                fogGrad.addColorStop(0, 'transparent');
+                fogGrad.addColorStop(1, 'rgba(100, 50, 255, 0.2)');
+                ctx.fillStyle = fogGrad;
+                ctx.fillRect((startI-1)*segmentWidth, -100, (endI-startI+2)*segmentWidth, 300);
+            }
+
+            ctx.restore();
+        });
+    }
+
+    // --- NUEVA FUNCIÓN DE MAPA (Plataformas Modernas) ---
+    function drawMap(ctx) {
+        platforms.forEach(p => {
+            // Cuerpo principal de la plataforma (Metal oscuro y pesado)
+            let metalGrad = createMetalGradient(ctx, p.x, p.y, p.height, COLORS.metalDark, '#2a2a35');
+            ctx.fillStyle = metalGrad;
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+
+            // Borde superior brillante (Neón azul cian)
+            setGlow(ctx, COLORS.neonBlue, 15);
+            ctx.fillStyle = COLORS.neonBlue;
+            ctx.fillRect(p.x, p.y, p.width, 6); // "Top" más delgado y brillante
+            resetGlow(ctx);
+
+            // Detalles de la estructura
+            ctx.strokeStyle = '#445566';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            // Líneas de paneles verticales
+            for(let i = 50; i < p.width; i+= 100) {
+                ctx.moveTo(p.x + i, p.y + 6);
+                ctx.lineTo(p.x + i, p.y + p.height);
+            }
+            ctx.stroke();
+
+            // Detalles decorativos brillantes (luces de estado incrustadas)
+            ctx.fillStyle = COLORS.neonPink;
+            for(let i = 20; i < p.width; i+= 150) {
+                if(p.height > 30) { // Solo en plataformas gruesas
+                     ctx.fillRect(p.x + i, p.y + 30, 8, 4);
+                }
+            }
+        });
+    }
+
+    // --- BUCLE PRINCIPAL (Misma lógica de cámara) ---
+    function loop() {
+        gameTime++;
+        
+        // Simular movimiento de cámara suave
+        camera.x = Math.sin(gameTime * 0.008) * 300; // Un poco más lento y amplio
+        
+        player.update(); walker.update(); flyer.update();
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 1. Dibujar Fondo (Se mueve con parallax)
+        drawBackground(ctx, camera.x, camera.y);
+        
+        ctx.save();
+        // El truco visual del testbed original: mantener entidades centradas visualmente
+        // mientras el fondo se mueve, para evaluar los assets.
+        let screenOffsetX = camera.x;
+        ctx.translate(screenOffsetX - 200, 0); 
+        
+        ctx.restore();
+        
+        // 2. Dibujar Mapa y Personajes (Fijos en pantalla para el test de diseño)
+        drawMap(ctx);
+        
+        // Sombra general debajo de los personajes para integrarlos mejor
+        ctx.save();
+        ctx.shadowColor = '#000'; ctx.shadowBlur = 20; ctx.shadowOffsetY = 10;
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+        ctx.restore();
+
+        // Efecto de viñeta sutil para enfocar la acción
+        let gradient = ctx.createRadialGradient(GAME_WIDTH/2, GAME_HEIGHT/2, 300, GAME_WIDTH/2, GAME_HEIGHT/2, 800);
+        gradient.addColorStop(0, 'transparent');
+        gradient.addColorStop(1, 'rgba(0,0,0,0.6)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0,0,GAME_WIDTH, GAME_HEIGHT);
+        
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>

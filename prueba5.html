@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: High-Prod Visual Upgrade</title>
+    <style>
+        /* ESTILOS DEL JUEGO */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050505;
+            /* Quitamos la fuente monoespaciada para el debug, usamos una más moderna */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 60px rgba(0, 255, 170, 0.2); /* Sutil brillo externo */
+            border: 2px solid #333;
+            background: #000;
+            width: 1280px;
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            background-color: #0f1210;
+            /* Quitamos pixelated para permitir gradientes suaves */
+            /* image-rendering: pixelated; */ 
+            width: 100%;
+            height: 100%;
+        }
+        /* Scanlines más sutiles para un look moderno de "pantalla" */
+        #scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), 
+                        linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+            background-size: 100% 3px, 3px 100%;
+            pointer-events: none;
+            z-index: 10;
+            opacity: 0.5;
+        }
+        #debug-ui {
+            position: absolute; top: 10px; left: 10px; color: #00ffaa; z-index: 20;
+            background: rgba(0,0,0,0.6); padding: 15px;
+            border-left: 3px solid #00ffaa;
+            backdrop-filter: blur(5px);
+        }
+        #debug-ui h3 { margin: 0 0 10px 0; font-weight: 300; letter-spacing: 2px; }
+        #debug-ui p { margin: 5px 0; font-size: 14px; color: #aaddcc; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="testCanvas"></canvas>
+    <div id="scanlines"></div>
+    <div id="debug-ui">
+        <h3>VISUAL TARGET: MODERN</h3>
+        <p>Bioma: NEO-INDUSTRIAL</p>
+        <p>Cámara: Auto-Scroll (Parallax Activo)</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- NUEVA PALETA DE COLORES (Materiales y Luces) ---
+    const PALETTE = {
+        metalDark: '#1a1a20',
+        metalMid: '#3e4552',
+        metalLight: '#7a8599',
+        rust: '#8c5e35',
+        neonCyan: '#00fff2',
+        neonOrange: '#ff8c00',
+        neonRed: '#ff3333'
+    };
+
+    // Configuración del Bioma (Colores base para gradientes)
+    const currentBiome = { 
+        name: "NEO-INDUSTRIAL", 
+        skyTop: '#020510',
+        skyBottom: '#0a1525',
+        // Capas de fondo: colores base para los gradientes de los edificios
+        layers: ['#080a0e', '#11151c', '#1a202b', '#252d3d'], 
+        groundTop: '#3e4552', 
+        groundBody: '#1a1a20' 
+    };
+    
+    // --- VARIABLES DE SIMULACIÓN ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+
+    // --- FUNCIONES AUXILIARES DE DIBUJO ---
+    function drawRoundedRect(ctx, x, y, width, height, radius, fillStyle, strokeStyle = null) {
+        ctx.beginPath();
+        ctx.moveTo(x + radius, y);
+        ctx.lineTo(x + width - radius, y);
+        ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+        ctx.lineTo(x + width, y + height - radius);
+        ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+        ctx.lineTo(x + radius, y + height);
+        ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+        ctx.lineTo(x, y + radius);
+        ctx.quadraticCurveTo(x, y, x + radius, y);
+        ctx.closePath();
+        if (fillStyle) { ctx.fillStyle = fillStyle; ctx.fill(); }
+        if (strokeStyle) { ctx.strokeStyle = strokeStyle; ctx.stroke(); }
+    }
+
+    function createMetallicGradient(ctx, x, y, h, color1, color2) {
+        let grd = ctx.createLinearGradient(x, y, x, y + h);
+        grd.addColorStop(0, color2);
+        grd.addColorStop(0.2, color1);
+        grd.addColorStop(0.5, color2);
+        grd.addColorStop(0.8, color1);
+        grd.addColorStop(1, color2);
+        return grd;
+    }
+    
+    // --- CLASES SIMULADAS (REDUISEÑADAS) ---
+
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 24; this.height = 40; // TAMAÑO ORIGINAL RESPETADO
+            this.vx = 0; 
+            this.animTimer = 0;
+            this.facingRight = true;
+            this.state = 'wait';
+            this.stateTimer = 0;
+        }
+
+        update() {
+            this.animTimer++;
+            this.stateTimer++;
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) {
+                    this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left';
+                    this.stateTimer = 0;
+                }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3; this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3; this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+        }
+
+        draw(ctx) {
+            ctx.save();
+            
+            // Inclinación al correr
+            let lean = 0; if (Math.abs(this.vx) > 1) lean = this.facingRight ? 2 : -2; 
+            ctx.translate(this.x + lean, this.y); // Dibujamos relativo a 0,0
+            
+            let cycle = Math.sin(this.animTimer * 0.5);
+            let legOffset1 = (Math.abs(this.vx) > 0.5) ? cycle * 3 : 0;
+            let legOffset2 = (Math.abs(this.vx) > 0.5) ? -cycle * 3 : 0;
+
+            // Gradiente Metálico para la armadura
+            let armorGrad = ctx.createLinearGradient(0, 0, this.width, this.height);
+            armorGrad.addColorStop(0, '#aaccdd');
+            armorGrad.addColorStop(0.5, '#556677');
+            armorGrad.addColorStop(1, '#334455');
+
+            // PIERNAS (Blindadas)
+            ctx.fillStyle = armorGrad;
+            drawRoundedRect(ctx, 4, 25, 7, 15 + legOffset1, 2, armorGrad);
+            drawRoundedRect(ctx, 13, 25, 7, 15 + legOffset2, 2, armorGrad);
+            // Detalles de articulación
+            ctx.fillStyle = '#222';
+            ctx.fillRect(4, 30 + legOffset1, 7, 2);
+            ctx.fillRect(13, 30 + legOffset2, 7, 2);
+
+            // CUERPO (Peto de armadura)
+            drawRoundedRect(ctx, 0, 10, this.width, 18, 3, armorGrad);
+            // Panel central brillante
+            ctx.fillStyle = PALETTE.neonCyan;
+            ctx.globalAlpha = 0.7;
+            ctx.fillRect(this.width/2 - 3, 15, 6, 8);
+            ctx.globalAlpha = 1.0;
+
+            // MOCHILA / JETPACK
+            let packX = this.facingRight ? -5 : this.width + 1;
+            let packGrad = ctx.createLinearGradient(packX, 12, packX+6, 22);
+            packGrad.addColorStop(0, '#444'); packGrad.addColorStop(1, '#222');
+            ctx.fillStyle = packGrad;
+            drawRoundedRect(ctx, packX, 12, 6, 12, 2, packGrad);
+            // Propulsor brillante
+            ctx.shadowColor = PALETTE.neonOrange; ctx.shadowBlur = 10;
+            ctx.fillStyle = PALETTE.neonOrange;
+            ctx.fillRect(packX + 1, 22, 4, 3);
+            ctx.shadowBlur = 0;
+
+            // CABEZA / CASCO
+            let helmetGrad = ctx.createLinearGradient(2, 0, 22, 12);
+            helmetGrad.addColorStop(0, '#ccc'); helmetGrad.addColorStop(1, '#555');
+            drawRoundedRect(ctx, 2, 0, 20, 12, 4, helmetGrad);
+            
+            // VISOR (Brillante)
+            let visorX = this.facingRight ? 12 : 4;
+            ctx.shadowColor = PALETTE.neonCyan;
+            ctx.shadowBlur = 8;
+            ctx.fillStyle = PALETTE.neonCyan;
+            drawRoundedRect(ctx, visorX, 3, 10, 5, 2, PALETTE.neonCyan);
+            ctx.shadowBlur = 0;
+
+            // ARMA (Más detallada)
+            let gunX = this.facingRight ? 12 : -8; 
+            let gunY = 14;
+            ctx.fillStyle = '#333';
+            drawRoundedRect(ctx, gunX, gunY, 18, 7, 1, '#333'); // Cuerpo principal
+            ctx.fillStyle = '#111';
+            ctx.fillRect(gunX + (this.facingRight? 18:-2), gunY+2, 4, 3); // Cañón
+            // Célula de energía del arma
+            ctx.fillStyle = PALETTE.neonCyan;
+            ctx.fillRect(gunX + 4, gunY + 1, 8, 2);
+
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 30; // TAMAÑO ORIGINAL RESPETADO
+            this.vx = 2; this.dir = 1; this.timer = 0;
+            this.state = 'walk'; this.startX = x; this.waitTimer = 0;
+        }
+
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) {
+                    this.state = 'wait'; this.waitTimer = 60;
+                }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) {
+                    this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk';
+                }
+            }
+        }
+
+        draw(ctx) {
+            ctx.save();
+            ctx.translate(this.x, this.y - 10); // Ajuste vertical original
+
+            let anim = Math.sin(this.timer * 0.2);
+            
+            // Gradiente de metal oxidado
+            let rustGrad = ctx.createLinearGradient(0, 0, this.width, this.height);
+            rustGrad.addColorStop(0, '#a36245'); // Óxido claro
+            rustGrad.addColorStop(0.6, '#5e3826'); // Óxido oscuro
+            rustGrad.addColorStop(1, '#3d2418');
+
+            // PIERNAS MECÁNICAS (Pistones)
+            ctx.fillStyle = '#222';
+            // Pistón superior
+            ctx.fillRect(5, 30, 6, 8); 
+            ctx.fillRect(19, 30, 6, 8);
+            // Parte inferior móvil
+            ctx.fillStyle = rustGrad;
+            drawRoundedRect(ctx, 4, 35, 8, 10 + anim * 4, 2, rustGrad);
+            drawRoundedRect(ctx, 18, 35, 8, 10 - anim * 4, 2, rustGrad);
+
+            // CUERPO PRINCIPAL (Blindado y pesado)
+            drawRoundedRect(ctx, 0, 0, this.width, this.height, 6, rustGrad);
+            // Remaches y detalles
+            ctx.fillStyle = '#2a1810';
+            ctx.beginPath(); ctx.arc(4, 4, 2, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.arc(26, 4, 2, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.arc(4, 26, 2, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.arc(26, 26, 2, 0, Math.PI*2); ctx.fill();
+
+            // OJO (Lente brillante amenazante)
+            ctx.shadowColor = PALETTE.neonRed;
+            ctx.shadowBlur = 15;
+            // Borde metálico del ojo
+            ctx.fillStyle = '#333';
+            ctx.beginPath(); ctx.arc(this.width/2, this.height/2 - 2, 8, 0, Math.PI*2); ctx.fill();
+            // Lente interior
+            let eyeGrad = ctx.createRadialGradient(this.width/2, this.height/2 - 2, 1, this.width/2, this.height/2 - 2, 6);
+            eyeGrad.addColorStop(0, '#ffcccc'); eyeGrad.addColorStop(0.5, '#ff0000'); eyeGrad.addColorStop(1, '#550000');
+            ctx.fillStyle = eyeGrad;
+            ctx.beginPath(); ctx.arc(this.width/2, this.height/2 - 2, 5, 0, Math.PI*2); ctx.fill();
+            ctx.shadowBlur = 0;
+            
+            // BRAZOS ROTATORIOS (Ahora parecen herramientas industriales)
+            let armColor = '#554433';
+            ctx.save(); ctx.translate(5, 15); ctx.rotate(anim); 
+            drawRoundedRect(ctx, -2.5, 0, 5, 18, 2, armColor); // Brazo izquierdo
+            ctx.restore();
+
+            ctx.save(); ctx.translate(25, 15); ctx.rotate(-anim); 
+            drawRoundedRect(ctx, -2.5, 0, 5, 18, 2, armColor); // Brazo derecho
+            ctx.restore();
+
+            ctx.restore();
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 20; // TAMAÑO ORIGINAL RESPETADO
+            this.startX = x; this.timer = 0;
+        }
+
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1.5; 
+        }
+
+        draw(ctx) {
+            ctx.save();
+            ctx.translate(this.x, this.y);
+
+            let pulse = Math.abs(Math.sin(this.timer * 0.1));
+            
+            // Gradiente del cuerpo del dron
+            let droneGrad = ctx.createLinearGradient(0,0, this.width, this.height);
+            droneGrad.addColorStop(0, '#445566'); droneGrad.addColorStop(1, '#223344');
+            
+            // "ALAS" (Ahora son paneles de gravedad brillantes)
+            let wingGlow = ctx.createLinearGradient(0, 0, 0, 20);
+            wingGlow.addColorStop(0, PALETTE.neonCyan);
+            wingGlow.addColorStop(1, 'transparent');
+            
+            ctx.globalAlpha = 0.6 + pulse * 0.4;
+            ctx.fillStyle = wingGlow;
+            // Ala Izquierda
+            ctx.beginPath(); ctx.moveTo(5, 5); ctx.lineTo(-5, 0); ctx.lineTo(-8, 15); ctx.lineTo(5, 15); ctx.fill();
+            // Ala Derecha
+            ctx.beginPath(); ctx.moveTo(25, 5); ctx.lineTo(35, 0); ctx.lineTo(38, 15); ctx.lineTo(25, 15); ctx.fill();
+            ctx.globalAlpha = 1.0;
+
+            // CUERPO CENTRAL (Elegante y metálico)
+            drawRoundedRect(ctx, 0, 2, this.width, 16, 4, droneGrad);
+            
+            // Detalles del cuerpo
+            ctx.fillStyle = '#111';
+            ctx.fillRect(10, 4, 10, 2); // Ranura superior
+
+            // MOTOR CENTRAL BRILLANTE
+            ctx.shadowColor = PALETTE.neonOrange;
+            ctx.shadowBlur = 12;
+            ctx.fillStyle = PALETTE.neonOrange;
+            // Núcleo del motor
+            ctx.beginPath(); ctx.arc(this.width/2, 10, 4, 0, Math.PI*2); ctx.fill();
+            
+            // Escape del motor
+            let exhaustGrad = ctx.createLinearGradient(this.width/2, 14, this.width/2, 24);
+            exhaustGrad.addColorStop(0, PALETTE.neonOrange);
+            exhaustGrad.addColorStop(1, 'transparent');
+            ctx.fillStyle = exhaustGrad;
+            ctx.beginPath(); ctx.moveTo(10, 14); ctx.lineTo(20, 14); ctx.lineTo(15, 24 + pulse*5); ctx.fill();
+
+            ctx.shadowBlur = 0;
+            ctx.restore();
+        }
+    }
+
+    // --- INSTANCIAS Y MAPA ---
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450); 
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200 },
+        { x: 750, y: 490, width: 400, height: 20 }
+    ];
+
+    // --- NUEVO DIBUJO DEL FONDO (Parallax Moderno) ---
+    function drawBackground(ctx, cameraX, cameraY) {
+        // Cielo con gradiente
+        let skyGrad = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        skyGrad.addColorStop(0, currentBiome.skyTop);
+        skyGrad.addColorStop(1, currentBiome.skyBottom);
+        ctx.fillStyle = skyGrad; 
+        ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.restore();
+        
+        // Configuración de capas para más detalle
+        const layers = [
+            // Capa más lejana, menos detalle, más oscura
+            { speed: 0.05, colorStart: currentBiome.layers[0], colorEnd: '#05070a', heightMod: 500, width: 120, gap: 2 }, 
+            { speed: 0.15, colorStart: currentBiome.layers[1], colorEnd: '#0a0d12', heightMod: 350, width: 180, gap: 10 }, 
+            { speed: 0.30, colorStart: currentBiome.layers[2], colorEnd: '#131821', heightMod: 250, width: 220, gap: 15 }, 
+            // Capa más cercana, más detalle
+            { speed: 0.60, colorStart: currentBiome.layers[3], colorEnd: '#1d2430', heightMod: 50, width: 280, gap: 30 }
+        ];
+        
+        layers.forEach((layer, index) => {
+            ctx.save(); 
+            let parallaxX = -cameraX * layer.speed; 
+            let parallaxY = -cameraY * (layer.speed * 0.3); // Menos movimiento vertical
+            ctx.translate(parallaxX, parallaxY);
+            
+            // Niebla atmosférica entre capas
+            ctx.fillStyle = layer.colorStart;
+            ctx.globalAlpha = 0.3 - (index * 0.05);
+            ctx.fillRect(cameraX * layer.speed, GAME_HEIGHT - layer.heightMod - 200, GAME_WIDTH + 200, 300);
+            ctx.globalAlpha = 1.0;
+
+            let totalW = layer.width + layer.gap; 
+            let startI = Math.floor(-parallaxX / totalW) - 2; 
+            let endI = startI + Math.ceil(GAME_WIDTH / totalW) + 4;
+            
+            for (let i = startI; i < endI; i++) {
+                let pseudoRandom = Math.sin(i * 134.5 + index * 12.1); 
+                let h = layer.heightMod + (pseudoRandom * 180 + 120); 
+                let x = i * totalW; 
+                let y = GAME_HEIGHT - h;
+                
+                // Gradiente vertical para el edificio (más oscuro abajo)
+                let buildGrad = ctx.createLinearGradient(x, y, x, GAME_HEIGHT);
+                buildGrad.addColorStop(0, layer.colorStart);
+                buildGrad.addColorStop(1, layer.colorEnd);
+                ctx.fillStyle = buildGrad;
+                ctx.fillRect(x, y, layer.width, h + 1000);
+                
+                // Detalles estructurales (Vigas y bordes)
+                ctx.strokeStyle = '#000';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x+2, y+2, layer.width-4, h);
+                if (index > 1 && pseudoRandom > 0) { // Solo en capas cercanas
+                    ctx.beginPath();
+                    ctx.moveTo(x, y + h/2); ctx.lineTo(x + layer.width, y + h/2 - 50); // Viga cruzada
+                    ctx.stroke();
+                }
+                
+                // Ventanas de Neón
+                if (Math.abs(pseudoRandom) > 0.2) {
+                    let wins = Math.abs(Math.floor(pseudoRandom * 4)) + 2;
+                    ctx.shadowBlur = 5; // Brillo sutil para las ventanas
+                    for (let w = 0; w < wins; w++) {
+                        for (let wh = 0; wh < 15; wh++) {
+                            if ((i + wh + w) % 4 !== 0) continue; // Patrón más disperso
+                            let winState = Math.sin(i * 45.5 + w * 12.1 + wh * 6.7);
+                            
+                            if (winState > 0.5) { 
+                                // Color basado en la capa (más rojizo lejos, más cian cerca)
+                                let winColor = (index < 2) ? '#ff5500' : PALETTE.neonCyan;
+                                ctx.shadowColor = winColor;
+                                ctx.fillStyle = winColor;
+                                // Ventanas más delgadas y modernas
+                                ctx.fillRect(x + 15 + w * 30, y + 80 + wh * 35, 6, 12);
+                            }
+                        }
+                    }
+                    ctx.shadowBlur = 0;
+                }
+            }
+            ctx.restore();
+        });
+    }
+
+    // --- NUEVO DIBUJO DEL MAPA (Plataformas Detalladas) ---
+    function drawMap(ctx) {
+        platforms.forEach(p => {
+            // 1. Cuerpo de la plataforma (Metal pesado y oscuro con textura)
+            let bodyGrad = createMetallicGradient(ctx, p.x, p.y, p.height, currentBiome.groundTop, currentBiome.groundBody);
+            ctx.fillStyle = bodyGrad;
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+
+            // Textura de vigas de soporte en el cuerpo
+            ctx.fillStyle = 'rgba(0,0,0,0.3)';
+            for(let i = p.x + 50; i < p.x + p.width; i += 100) {
+                 ctx.fillRect(i, p.y + 15, 10, p.height - 15);
+            }
+
+            // 2. Parte Superior (Rejilla metálica y borde iluminado)
+            let topHeight = 12;
+            let topGrad = ctx.createLinearGradient(p.x, p.y, p.x, p.y + topHeight);
+            topGrad.addColorStop(0, '#556677');
+            topGrad.addColorStop(1, '#2a333f');
+            ctx.fillStyle = topGrad;
+            ctx.fillRect(p.x, p.y, p.width, topHeight);
+
+            // Patrón de rejilla/diamante en la superficie
+            ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for(let i = p.x; i < p.x + p.width; i += 8) {
+                ctx.moveTo(i, p.y); ctx.lineTo(i + 8, p.y + topHeight);
+                ctx.moveTo(i + 8, p.y); ctx.lineTo(i, p.y + topHeight);
+            }
+            ctx.stroke();
+
+            // Borde brillante superior
+            ctx.fillStyle = '#8899aa';
+            ctx.fillRect(p.x, p.y, p.width, 2);
+        });
+    }
+
+    // --- BUCLE PRINCIPAL (Sin cambios lógicos mayores) ---
+    function loop() {
+        gameTime++;
+        // Movimiento de cámara un poco más lento y amplio para apreciar el detalle
+        camera.x = Math.sin(gameTime * 0.005) * 300; 
+        
+        player.update();
+        walker.update();
+        flyer.update();
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        drawBackground(ctx, camera.x, camera.y);
+        
+        ctx.save();
+        ctx.translate(-camera.x + 200, 0); 
+        drawMap(ctx);
+        ctx.restore();
+
+        let screenOffsetX = camera.x;
+        ctx.save();
+        ctx.translate(screenOffsetX, 0); 
+        ctx.restore();
+        
+        // Dibujamos todo centrado para el test
+        ctx.save();
+        ctx.translate(200,0); // Offset fijo para centrar la acción en el canvas
+        drawMap(ctx);
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+        ctx.restore();
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>
