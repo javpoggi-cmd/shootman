@@ -1,0 +1,705 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Cute Shootman: Kawaii Edition</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #ffe6f2; /* Fondo rosa pálido fuera del canvas */
+            font-family: 'Comic Sans MS', 'Chalkboard SE', sans-serif; /* Fuente más amigable */
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 40px rgba(255, 182, 193, 0.8); /* Glow rosa */
+            border: 8px solid #fff;
+            border-radius: 20px;
+            background: #e0f7fa;
+            width: 1280px;
+            height: 720px;
+            overflow: hidden;
+        }
+        canvas {
+            display: block;
+            background-color: #e0f7fa;
+            /* image-rendering: pixelated; <--- Quitamos pixelated para que se vea suave (vectorial cute) */
+            width: 100%;
+            height: 100%;
+        }
+        /* Overlay de viñeta suave en lugar de scanlines agresivas */
+        #vignette {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, rgba(255,255,255,0) 60%, rgba(255,200,220,0.4) 100%);
+            pointer-events: none;
+            z-index: 10;
+            border-radius: 12px;
+        }
+        #debug-ui {
+            position: absolute; top: 15px; left: 15px; 
+            color: #9d8ec3; /* Lila oscuro */
+            z-index: 20;
+            background: rgba(255, 255, 255, 0.8); 
+            padding: 15px;
+            border-radius: 15px;
+            border: 2px solid #ffb7b2;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="testCanvas"></canvas>
+    <div id="vignette"></div>
+    <div id="debug-ui">
+        <h3>TEST DE DISEÑO: KAWAII</h3>
+        <p>Bioma: CANDY LAND</p>
+        <p>Cámara: Auto-Scroll</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- PALETA DE COLORES PASTEL ---
+    const COLORS = { 
+        outline: '#9d8ec3', // Delineado Lila
+        white: '#ffffff',
+        skin: '#fff0f5', // Rosa muy pálido
+        pink: '#ffb7b2',
+        hotPink: '#ff9aa2',
+        blue: '#c7ceea',
+        yellow: '#fff79a',
+        green: '#b5ead7',
+        purple: '#e2f0cb'
+    };
+
+    // --- UTILS DE DIBUJO CUTE ---
+    // Función para dibujar rectángulos con bordes redondeados (estilo suave)
+    function drawRoundedRect(ctx, x, y, width, height, radius, fill, stroke) {
+        ctx.beginPath();
+        ctx.moveTo(x + radius, y);
+        ctx.lineTo(x + width - radius, y);
+        ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+        ctx.lineTo(x + width, y + height - radius);
+        ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+        ctx.lineTo(x + radius, y + height);
+        ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+        ctx.lineTo(x, y + radius);
+        ctx.quadraticCurveTo(x, y, x + radius, y);
+        ctx.closePath();
+        if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+        if (stroke) { ctx.lineWidth = 2; ctx.strokeStyle = COLORS.outline; ctx.stroke(); }
+    }
+
+    // Dibujar corazón
+    function drawHeart(ctx, x, y, size, color) {
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.bezierCurveTo(-size/2, -size/2, -size, size/3, 0, size);
+        ctx.bezierCurveTo(size, size/3, size/2, -size/2, 0, 0);
+        ctx.fill();
+        ctx.restore();
+    }
+
+    // Dibujar Estrella
+    function drawStar(ctx, cx, cy, spikes, outerRadius, innerRadius, color) {
+        let rot = Math.PI / 2 * 3;
+        let x = cx;
+        let y = cy;
+        let step = Math.PI / spikes;
+
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - outerRadius);
+        for (let i = 0; i < spikes; i++) {
+            x = cx + Math.cos(rot) * outerRadius;
+            y = cy + Math.sin(rot) * outerRadius;
+            ctx.lineTo(x, y);
+            rot += step;
+
+            x = cx + Math.cos(rot) * innerRadius;
+            y = cy + Math.sin(rot) * innerRadius;
+            ctx.lineTo(x, y);
+            rot += step;
+        }
+        ctx.lineTo(cx, cy - outerRadius);
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+    }
+
+    // --- VARIABLES DE SIMULACIÓN ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+    
+    // --- EFECTOS ---
+    let hearts = [];
+    let shootingStars = [];
+
+    // --- CLASES MODIFICADAS CON ARTE CUTE ---
+
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 24; this.height = 40; // Mismo tamaño
+            this.vx = 0; 
+            this.animTimer = 0;
+            this.facingRight = true;
+            this.state = 'wait';
+            this.stateTimer = 0;
+        }
+
+        update() {
+            this.animTimer++;
+            this.stateTimer++;
+
+            // IA Simple (Original)
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { 
+                    this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left';
+                    this.stateTimer = 0;
+                }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3;
+                this.facingRight = true;
+                this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3;
+                this.facingRight = false;
+                this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            
+            // Limites
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+        }
+
+        draw(ctx) {
+            // ARTE: Conejito Kawaii
+            ctx.save();
+            
+            // Invertir si mira a la izquierda
+            let scaleX = this.facingRight ? 1 : -1;
+            let drawX = this.facingRight ? this.x : this.x + this.width;
+            
+            ctx.translate(drawX, this.y);
+            ctx.scale(scaleX, 1);
+
+            // Rebote al caminar
+            let bounce = Math.abs(this.vx) > 0 ? Math.sin(this.animTimer * 0.5) * 2 : 0;
+            
+            // Orejas (sobresalen del hitbox original hacia arriba, es puramente visual)
+            ctx.fillStyle = COLORS.white;
+            ctx.strokeStyle = COLORS.outline;
+            ctx.lineWidth = 2;
+            
+            // Oreja Izq
+            ctx.beginPath(); ctx.ellipse(6, 0 + bounce, 4, 10, -0.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = COLORS.pink; ctx.beginPath(); ctx.ellipse(6, 0 + bounce, 2, 6, -0.2, 0, Math.PI * 2); ctx.fill();
+            
+            // Oreja Der
+            ctx.fillStyle = COLORS.white;
+            ctx.beginPath(); ctx.ellipse(18, 0 + bounce, 4, 10, 0.2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.fillStyle = COLORS.pink; ctx.beginPath(); ctx.ellipse(18, 0 + bounce, 2, 6, 0.2, 0, Math.PI * 2); ctx.fill();
+
+            // Cabeza (Ocupa la parte superior del hitbox)
+            ctx.fillStyle = COLORS.white;
+            drawRoundedRect(ctx, 0, 5 + bounce, 24, 20, 10, COLORS.white, true);
+
+            // Carita
+            ctx.fillStyle = '#333';
+            ctx.beginPath(); ctx.arc(16, 15 + bounce, 2, 0, Math.PI * 2); ctx.fill(); // Ojo der
+            ctx.beginPath(); ctx.arc(8, 15 + bounce, 2, 0, Math.PI * 2); ctx.fill();  // Ojo izq
+            ctx.fillStyle = COLORS.hotPink;
+            ctx.beginPath(); ctx.ellipse(12, 18 + bounce, 3, 2, 0, 0, Math.PI*2); ctx.fill(); // Mejillas
+            
+            // Cuerpo (Vestido/Traje)
+            ctx.fillStyle = COLORS.blue;
+            drawRoundedRect(ctx, 2, 22 + bounce, 20, 15, 5, COLORS.blue, true);
+            
+            // Moño en el cuello
+            drawHeart(ctx, 12, 24 + bounce, 6, COLORS.hotPink);
+
+            // Piernas
+            ctx.fillStyle = COLORS.white;
+            if (Math.abs(this.vx) > 0.5) {
+                let legAnim = Math.sin(this.animTimer * 0.5);
+                drawRoundedRect(ctx, 4, 35 + bounce, 6, 5 + legAnim * 2, 2, COLORS.white, true);
+                drawRoundedRect(ctx, 14, 35 + bounce, 6, 5 - legAnim * 2, 2, COLORS.white, true);
+            } else {
+                drawRoundedRect(ctx, 4, 35 + bounce, 6, 5, 2, COLORS.white, true);
+                drawRoundedRect(ctx, 14, 35 + bounce, 6, 5, 2, COLORS.white, true);
+            }
+
+            // Arma (Varita Mágica de Estrella)
+            let gunY = 20 + bounce;
+            ctx.fillStyle = COLORS.yellow;
+            ctx.strokeStyle = COLORS.outline;
+            ctx.lineWidth = 1;
+            ctx.fillRect(16, gunY, 10, 3); // Palo
+            drawStar(ctx, 28, gunY + 1.5, 5, 6, 3, COLORS.yellow); // Punta estrella
+            ctx.strokeRect(28-2, gunY-2, 4, 4); // Brillo simple
+
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 30;
+            this.vx = 2;
+            this.dir = 1;
+            this.timer = 0;
+            this.state = 'walk';
+            this.startX = x;
+        }
+
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) {
+                    this.state = 'wait'; this.waitTimer = 60;
+                }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) {
+                    this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk';
+                }
+            }
+        }
+
+        draw(ctx) {
+            // ARTE: Cupcake Enojado Caminante
+            let anim = Math.sin(this.timer * 0.2) * 2;
+            let drawY = this.y;
+
+            // Envoltorio del cupcake (base)
+            ctx.fillStyle = COLORS.hotPink;
+            ctx.strokeStyle = COLORS.outline;
+            ctx.lineWidth = 2;
+            
+            ctx.beginPath();
+            ctx.moveTo(this.x + 5, drawY + 20);
+            ctx.lineTo(this.x + 25, drawY + 20); // Top ancho
+            ctx.lineTo(this.x + 22, drawY + 30); // Base estrecha
+            ctx.lineTo(this.x + 8, drawY + 30);
+            ctx.closePath();
+            ctx.fill(); ctx.stroke();
+
+            // Pliegues del papel
+            ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(this.x+10, drawY+20); ctx.lineTo(this.x+10, drawY+30); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(this.x+15, drawY+20); ctx.lineTo(this.x+15, drawY+30); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(this.x+20, drawY+20); ctx.lineTo(this.x+20, drawY+30); ctx.stroke();
+
+            // Muffin Top (Glaseado) - Rebota un poco
+            ctx.fillStyle = '#fff'; // Crema
+            ctx.beginPath();
+            ctx.arc(this.x + 15, drawY + 15 + anim, 12, 0, Math.PI * 2); // Bola principal
+            ctx.fill(); 
+            // Bordes del glaseado
+            ctx.lineWidth = 2; ctx.strokeStyle = COLORS.outline; ctx.stroke();
+
+            // Cereza
+            ctx.fillStyle = '#ff0000';
+            ctx.beginPath(); ctx.arc(this.x + 15, drawY + 4 + anim, 4, 0, Math.PI * 2); ctx.fill();
+
+            // Carita Enojada Kawaii
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            // Ojos inclinados > <
+            ctx.moveTo(this.x + 10, drawY + 14 + anim); ctx.lineTo(this.x + 14, drawY + 16 + anim); // Ojo izq
+            ctx.moveTo(this.x + 20, drawY + 14 + anim); ctx.lineTo(this.x + 16, drawY + 16 + anim); // Ojo der
+            ctx.stroke();
+
+            // Patitas
+            ctx.fillStyle = COLORS.hotPink;
+            let walkAnim = Math.sin(this.timer * 0.4) * 5;
+            ctx.fillRect(this.x + 8, drawY + 28 + walkAnim, 4, 6);
+            ctx.fillRect(this.x + 18, drawY + 28 - walkAnim, 4, 6);
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 20;
+            this.startX = x;
+            this.timer = 0;
+        }
+
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1; 
+        }
+
+        draw(ctx) {
+            // ARTE: Abejita Kawaii Redonda
+            let hover = Math.sin(this.timer * 0.1) * 2;
+            
+            // Alas aleteando
+            let flap = Math.abs(Math.sin(this.timer * 0.8)) * 10;
+            ctx.fillStyle = '#fff';
+            ctx.globalAlpha = 0.7;
+            ctx.beginPath(); ctx.ellipse(this.x + 5, this.y - 5, 8, 12 - flap/2, 0.5, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.ellipse(this.x + 25, this.y - 5, 8, 12 - flap/2, -0.5, 0, Math.PI*2); ctx.fill();
+            ctx.globalAlpha = 1.0;
+
+            // Cuerpo
+            ctx.fillStyle = COLORS.yellow;
+            ctx.strokeStyle = COLORS.outline;
+            ctx.lineWidth = 2;
+            
+            ctx.beginPath();
+            ctx.ellipse(this.x + 15, this.y + 10 + hover, 15, 12, 0, 0, Math.PI * 2);
+            ctx.fill(); ctx.stroke();
+
+            // Rayas
+            ctx.fillStyle = '#665';
+            ctx.beginPath(); ctx.rect(this.x + 8, this.y + 2 + hover, 4, 16); ctx.fill();
+            ctx.beginPath(); ctx.rect(this.x + 18, this.y + 2 + hover, 4, 16); ctx.fill();
+
+            // Carita
+            ctx.fillStyle = '#000';
+            ctx.beginPath(); ctx.arc(this.x + 12, this.y + 12 + hover, 1.5, 0, Math.PI*2); ctx.fill();
+            ctx.beginPath(); ctx.arc(this.x + 18, this.y + 12 + hover, 1.5, 0, Math.PI*2); ctx.fill();
+            // Boca :3
+            ctx.lineWidth = 1; 
+            ctx.beginPath(); 
+            ctx.arc(this.x + 14, this.y + 16 + hover, 2, 0, Math.PI, false); 
+            ctx.arc(this.x + 16, this.y + 16 + hover, 2, 0, Math.PI, false); 
+            ctx.stroke();
+        }
+    }
+
+    // --- INSTANCIAS ---
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450); 
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200 }, 
+        { x: 750, y: 490, width: 400, height: 20 }  
+    ];
+
+    // --- SISTEMA DE PARALLAX MEJORADO (5 Capas + Cielo) ---
+    // Capas: 
+    // 0: Estrellas lejanas (Cielo)
+    // 1: Montañas lejanas (Lila)
+    // 2: Colinas nube (Rosa)
+    // 3: Piruletas gigantes y árboles de algodón (Fondo cercano)
+    // 4: Detalles cercanos (Arbustos brillantes)
+    // 5: PRIMER PLANO (Delante del jugador)
+
+    function drawCloud(ctx, x, y, size, color) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(x, y, size, 0, Math.PI * 2);
+        ctx.arc(x + size * 0.8, y - size * 0.5, size * 0.9, 0, Math.PI * 2);
+        ctx.arc(x + size * 1.6, y, size, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    function drawHill(ctx, x, y, width, height, color) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(x, y + height);
+        ctx.quadraticCurveTo(x + width / 2, y - height * 0.2, x + width, y + height);
+        ctx.fill();
+    }
+
+    function drawBackground(ctx, cameraX, cameraY) {
+        // Cielo Base
+        let grd = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        grd.addColorStop(0, '#e0f7fa'); // Celeste claro
+        grd.addColorStop(1, '#ffffff'); // Blanco
+        ctx.fillStyle = grd;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Estrellas Fijas en el cielo (brillan suavemente)
+        ctx.save();
+        ctx.translate(-cameraX * 0.01, -cameraY * 0.01);
+        for(let i=0; i<20; i++) {
+            let sx = (i * 137) % GAME_WIDTH;
+            let sy = (i * 53) % 400;
+            drawStar(ctx, sx, sy, 4, 6, 2, COLORS.white);
+        }
+        ctx.restore();
+
+        // CAPAS PARALLAX
+        const layers = [
+            // Capa 1: Montañas Lila Lejanas
+            { speed: 0.1, type: 'hills', color: '#e6e6fa', size: 300, yOffset: 200, gap: 0 }, 
+            // Capa 2: Colinas Rosa Pastel
+            { speed: 0.25, type: 'hills', color: '#ffe4e1', size: 200, yOffset: 100, gap: -50 },
+            // Capa 3: Piruletas y Decoración
+            { speed: 0.75, type: 'bushes', color: '#b5ead7', yOffset: 0 },
+            { speed: 0.5, type: 'objects', yOffset: 50 },
+            // Capa 4: Arbustos cercanos
+            ,
+            { speed: 0.5, type: 'bushes2', color: '#b5ead7', yOffset: 0 }
+        ];
+
+        layers.forEach((layer, index) => {
+            ctx.save();
+            let parallaxX = -cameraX * layer.speed;
+            let parallaxY = -cameraY * (layer.speed * 0.2);
+            ctx.translate(parallaxX, parallaxY);
+
+            let patternWidth = 400; // Ancho del patrón que se repite
+            let startI = Math.floor(-parallaxX / patternWidth) - 1;
+            let endI = startI + Math.ceil(GAME_WIDTH / patternWidth) + 2;
+
+            for (let i = startI; i < endI; i++) {
+                let x = i * patternWidth;
+                let y = GAME_HEIGHT - layer.yOffset;
+
+                if (layer.type === 'hills') {
+                    // Colinas suaves
+                    ctx.fillStyle = layer.color;
+                    ctx.beginPath();
+                    ctx.moveTo(x, GAME_HEIGHT);
+                    // Curva de Bezier para hacer colinas redondas
+                    ctx.bezierCurveTo(x + 100, y - 550, x + 300, y - 550, x + 600, GAME_HEIGHT);
+                    ctx.fill();
+                } else if (layer.type === 'objects') {
+                    // Piruletas gigantes
+                    if (i % 2 === 0) {
+                        // Piruleta
+                        let stickX = x + 100;
+                        let stickY = GAME_HEIGHT - 300;
+                        ctx.fillStyle = '#fff'; ctx.fillRect(stickX - 3, stickY, 6, 200); // Palo
+                        
+                        ctx.fillStyle = COLORS.pink;
+                        ctx.beginPath(); ctx.arc(stickX, stickY, 30, 0, Math.PI*2); ctx.fill();
+                        ctx.strokeStyle = '#fff'; ctx.lineWidth = 3;
+                        ctx.beginPath(); ctx.arc(stickX, stickY, 20, 0, Math.PI*2); ctx.stroke();
+                        ctx.beginPath(); ctx.arc(stickX, stickY, 10, 0, Math.PI*2); ctx.stroke();
+                    } else {
+                        // Árbol de caramelo
+                        let treeX = x + 250;
+                        let treeY = GAME_HEIGHT - 320;
+                        ctx.fillStyle = '#dcb085'; ctx.fillRect(treeX + 40, treeY, 10, 300); // Tronco
+                        ctx.fillStyle = '#74e3cd';
+                        drawCloud(ctx, treeX, treeY - 20, 55, '#74e3cd');
+                        drawCloud(ctx, treeX + 20, treeY + 10, 30, '#5cf2f7');
+                        drawCloud(ctx, treeX + 10, treeY + 20, 10, '#c0fcf0');
+                    }
+                } else if (layer.type === 'bushes') {
+                    // Arbustos en el suelo del fondo
+                    drawCloud(ctx, x + 50, GAME_HEIGHT - 220, 90, layer.color);
+                    drawCloud(ctx, x + 250, GAME_HEIGHT - 80, 160, '#95e6b3'); // Un poco más claro
+                } else if (layer.type === 'bushes2') {
+                    // Arbustos en el suelo del fondo
+                    drawCloud(ctx, x + 50, GAME_HEIGHT - 160, 60, layer.color);
+                    drawCloud(ctx, x + 250, GAME_HEIGHT - 60, 90, '#c3fbd8'); // Un poco más claro
+                }
+            }
+            ctx.restore();
+        });
+    }
+
+    function drawForeground(ctx, cameraX) {
+        // Capa 5: Primer Plano (Nubes muy rápidas y transparentes)
+        let speed = 1.2;
+        let parallaxX = -cameraX * speed;
+        
+        ctx.save();
+        ctx.translate(parallaxX, 0);
+        
+        let patternWidth = 800;
+        let startI = Math.floor(-parallaxX / patternWidth) - 1;
+        let endI = startI + Math.ceil(GAME_WIDTH / patternWidth) + 2;
+
+        for (let i = startI; i < endI; i++) {
+            let x = i * patternWidth;
+            // Nubes bajas que tapan un poco la visión
+            ctx.globalAlpha = 0.4;
+            drawCloud(ctx, x + 200, GAME_HEIGHT + 20, 80, '#fff');
+            drawCloud(ctx, x + 600, GAME_HEIGHT + 50, 100, '#fff');
+            ctx.globalAlpha = 1.0;
+        }
+        ctx.restore();
+    }
+
+    // --- EFECTOS DE PARTÍCULAS ---
+    function updateAndDrawParticles(ctx) {
+        // Generar corazones aleatorios (Lluvia suave)
+        if (Math.random() < 0.05) {
+            hearts.push({
+                x: Math.random() * GAME_WIDTH,
+                y: -20,
+                size: Math.random() * 10 + 5,
+                speed: Math.random() * 2 + 1,
+                oscillation: Math.random() * 0.1,
+                timer: 0,
+                color: Math.random() > 0.5 ? COLORS.pink : COLORS.hotPink
+            });
+        }
+
+        // Estrellas fugaces (Fondo)
+        if (Math.random() < 0.01) {
+            shootingStars.push({
+                x: Math.random() * GAME_WIDTH,
+                y: Math.random() * GAME_HEIGHT * 0.5,
+                length: 0,
+                maxLen: 100 + Math.random() * 100,
+                speed: 15,
+                life: 1.0
+            });
+        }
+
+        // Dibujar estrellas fugaces (detrás de todo idealmente, pero aquí lo hacemos simple)
+        ctx.save();
+        for (let i = shootingStars.length - 1; i >= 0; i--) {
+            let s = shootingStars[i];
+            s.x -= s.speed;
+            s.y += s.speed * 0.5;
+            s.length = Math.min(s.length + 5, s.maxLen);
+            s.life -= 0.02;
+
+            if (s.life <= 0) shootingStars.splice(i, 1);
+            else {
+                ctx.globalAlpha = s.life;
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(s.x, s.y);
+                ctx.lineTo(s.x + s.length, s.y - s.length * 0.5);
+                ctx.stroke();
+            }
+        }
+        ctx.restore();
+
+        // Dibujar Corazones (Capa frontal UI)
+        ctx.save();
+        for (let i = hearts.length - 1; i >= 0; i--) {
+            let h = hearts[i];
+            h.y += h.speed;
+            h.timer++;
+            let sway = Math.sin(h.timer * 0.05) * 2;
+            
+            drawHeart(ctx, h.x + sway, h.y, h.size, h.color);
+
+            // Eliminar si sale
+            if (h.y > GAME_HEIGHT) hearts.splice(i, 1);
+        }
+        ctx.restore();
+    }
+
+    function drawMap(ctx) {
+        platforms.forEach(p => {
+            // Cuerpo de la plataforma (Bizcocho)
+            ctx.fillStyle = '#f5deb3'; // Color trigo/galleta
+            drawRoundedRect(ctx, p.x, p.y, p.width, p.height, 10, '#f5deb3', false);
+            
+            // Textura de galleta (puntitos)
+            ctx.fillStyle = '#d2b48c';
+            for (let i = 0; i < p.width; i += 40) {
+                for (let j = 0; j < Math.min(p.height, 50); j += 20) {
+                    if (Math.random() > 0.5) ctx.fillRect(p.x + i + 10, p.y + j + 20, 4, 4);
+                }
+            }
+
+            // Glaseado (Top)
+            ctx.fillStyle = COLORS.white; // Glaseado blanco
+            ctx.beginPath();
+            ctx.rect(p.x, p.y, p.width, 15);
+            // Gotas de glaseado
+            let dripSpacing = 30;
+            for (let i = 0; i < p.width; i += dripSpacing) {
+                let dripHeight = 15 + Math.sin(i * 123) * 10 + 5;
+                ctx.arc(p.x + i + 15, p.y + 10, 15, 0, Math.PI, false);
+            }
+            ctx.fill();
+
+            // Decoración sobre el glaseado (Sprinkles de colores)
+            for (let i = 0; i < p.width; i += 25) {
+                let col = [COLORS.pink, COLORS.blue, COLORS.yellow][i % 3];
+                ctx.fillStyle = col;
+                ctx.fillRect(p.x + i + 5, p.y + 5, 6, 3);
+            }
+            
+            // Delineado exterior lindo
+            drawRoundedRect(ctx, p.x, p.y, p.width, p.height, 10, null, true);
+        });
+    }
+
+    // --- BUCLE PRINCIPAL ---
+    function loop() {
+        gameTime++;
+        
+        // Simular movimiento de cámara (Onda lenta)
+        camera.x = Math.sin(gameTime * 0.005) * 200;
+        
+        // Actualizar entidades
+        player.update();
+        walker.update();
+        flyer.update();
+
+        // Renderizar
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 1. Fondo con Parallax
+        drawBackground(ctx, camera.x, camera.y);
+        
+        // Efectos de fondo (estrellas fugaces) se dibujan en background o aquí
+        
+        // 2. Mundo (Plataformas y Entidades)
+        ctx.save();
+        ctx.translate(-camera.x + 200, 0); 
+
+        drawMap(ctx);
+        
+        // Dibujar Entidades
+        // Hack de renderizado del usuario original para mantener entidades visibles
+        let screenOffsetX = camera.x;
+        ctx.save();
+        ctx.translate(screenOffsetX, 0); 
+        ctx.restore();
+        
+        drawMap(ctx); // Redibujar mapa encima si se necesita para efectos de profundidad, o dejar simple
+        
+        // Dibujamos las entidades
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+        
+        ctx.restore();
+
+        // 3. Primer Plano (Nubes frontales)
+        drawForeground(ctx, camera.x);
+
+        // 4. UI / Efectos de Pantalla completa (Lluvia de corazones)
+        updateAndDrawParticles(ctx);
+
+        requestAnimationFrame(loop);
+    }
+
+    // Iniciar
+    loop();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Aetherpunk Engine</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #1a1510;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            width: 1280px;
+            height: 720px;
+            background: #2b1d12;
+            box-shadow: 0 0 80px rgba(255, 150, 50, 0.2);
+            border: 8px solid #5c4033;
+            border-radius: 4px;
+        }
+        canvas { display: block; width: 100%; height: 100%; }
+        
+        /* UI estilo Victoriano */
+        #ui {
+            position: absolute; top: 20px; left: 20px;
+            font-family: 'Georgia', serif;
+            color: #ffcc88;
+            text-shadow: 2px 2px 0px #3e2723;
+            z-index: 100;
+            pointer-events: none;
+            background: rgba(40, 30, 20, 0.8);
+            padding: 15px;
+            border: 2px solid #b8860b;
+            box-shadow: inset 0 0 20px #000;
+        }
+        h1 { margin: 0; font-size: 24px; font-variant: small-caps; letter-spacing: 2px; }
+        .sub { font-size: 14px; color: #cd853f; font-style: italic; border-top: 1px solid #8b4513; margin-top: 5px; padding-top: 5px;}
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="steamCanvas"></canvas>
+    <div id="ui">
+        <h1>Aetherpunk Engine</h1>
+        <div class="sub">Altitude: 15,000 ft // Pressure: Stable</div>
+    </div>
+</div>
+
+<script>
+(function() {
+    const canvas = document.getElementById('steamCanvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    const W = 1280;
+    const H = 720;
+    canvas.width = W; canvas.height = H;
+
+    let globalTime = 0;
+
+    // --- PALETA DE COLORES STEAM/AETHER ---
+    const PALETTE = {
+        skyTop: '#4a3b52', // Violeta oscuro
+        skyBot: '#e6a35c', // Naranja atardecer
+        brassLight: '#ffd700',
+        brassDark: '#b8860b',
+        woodLight: '#8b5a2b',
+        woodDark: '#5c4033',
+        steam: 'rgba(255, 255, 240, 0.3)'
+    };
+
+    // --- GENERADOR DE TEXTURAS (MATERIALES) ---
+    function createMaterial(type) {
+        const c = document.createElement('canvas');
+        const x = c.getContext('2d');
+        
+        if (type === 'wood') {
+            c.width = 100; c.height = 100;
+            x.fillStyle = PALETTE.woodLight; x.fillRect(0,0,100,100);
+            x.fillStyle = PALETTE.woodDark;
+            // Vetas de madera
+            for(let i=0; i<20; i++) {
+                x.globalAlpha = 0.3;
+                x.beginPath();
+                let startY = Math.random() * 100;
+                x.moveTo(0, startY);
+                x.bezierCurveTo(30, startY + Math.random()*20, 70, startY - Math.random()*20, 100, startY);
+                x.lineWidth = Math.random() * 3 + 1;
+                x.stroke();
+            }
+        } 
+        else if (type === 'gear') {
+            // Patrón de engranaje repetible (malla)
+            c.width = 40; c.height = 40;
+            x.fillStyle = '#2a2018'; x.fillRect(0,0,40,40);
+            x.strokeStyle = '#3e2723'; x.lineWidth = 2;
+            x.beginPath(); x.moveTo(0,0); x.lineTo(40,40); x.stroke();
+            x.beginPath(); x.moveTo(40,0); x.lineTo(0,40); x.stroke();
+            x.fillStyle = '#1a1008'; x.fillRect(15,15,10,10); // Remache central
+        }
+        else if (type === 'cloud') {
+            c.width = 200; c.height = 100;
+            // Nubes pintadas
+        }
+        return x.createPattern(c, 'repeat');
+    }
+    
+    const matWood = createMaterial('wood');
+    const matMesh = createMaterial('gear');
+
+    // --- UTILIDAD: DIBUJAR ENGRANAJE ---
+    function drawGear(ctx, x, y, teeth, radius, color, rotation) {
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(rotation);
+        ctx.fillStyle = color;
+        
+        // Dientes
+        for (let i = 0; i < teeth; i++) {
+            ctx.save();
+            ctx.rotate((Math.PI * 2 / teeth) * i);
+            ctx.fillRect(-5, -radius - 5, 10, 15);
+            ctx.restore();
+        }
+        
+        // Cuerpo
+        ctx.beginPath();
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Detalle interior (hueco)
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        ctx.beginPath();
+        ctx.arc(0, 0, radius * 0.7, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // Ejes
+        ctx.fillStyle = color;
+        ctx.fillRect(-radius*0.7, -5, radius*1.4, 10);
+        ctx.fillRect(-5, -radius*0.7, 10, radius*1.4);
+        
+        // Centro
+        ctx.fillStyle = '#fff7cc';
+        ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI*2); ctx.fill();
+
+        ctx.restore();
+    }
+
+    // --- CLASES DE JUEGO (STEAMPUNK) ---
+
+    class AviatorPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.vx = 0; this.facingRight = true;
+            this.state = 'wait'; this.stateTimer = 0;
+            this.animTimer = 0;
+        }
+        update() {
+            this.stateTimer++; this.animTimer++;
+            // Lógica mock
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3; this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3; this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) this.state = 'walk_right';
+            if(this.x > 600) this.state = 'walk_left';
+        }
+
+        draw(ctx) {
+            ctx.save();
+            ctx.translate(this.x + 12, this.y + 20);
+            if(!this.facingRight) ctx.scale(-1, 1);
+
+            let bob = Math.abs(this.vx) > 0 ? Math.sin(this.animTimer * 0.4) * 2 : 0;
+            
+            // Mochila de Vapor (Steam Pack)
+            ctx.fillStyle = '#8b4513'; // Cuero
+            ctx.fillRect(-10, -10 + bob, 8, 20);
+            ctx.fillStyle = '#cd7f32'; // Tanque bronce
+            ctx.fillRect(-12, -12 + bob, 6, 24);
+            // Emisión de vapor
+            if(this.animTimer % 5 === 0) {
+                // Simulado visualmente en loop de particulas, aqui solo el punto de salida
+            }
+
+            // Cuerpo (Abrigo de Aviador)
+            ctx.fillStyle = '#5c4033';
+            ctx.beginPath();
+            ctx.moveTo(-5, -15 + bob);
+            ctx.lineTo(5, -15 + bob);
+            ctx.lineTo(8, 20); // Abrigo abierto
+            ctx.lineTo(-8, 20);
+            ctx.fill();
+            
+            // Botones latón
+            ctx.fillStyle = '#ffd700';
+            ctx.fillRect(0, -5 + bob, 2, 2);
+            ctx.fillRect(0, 0 + bob, 2, 2);
+
+            // Cabeza
+            ctx.fillStyle = '#d2b48c'; // Piel
+            ctx.fillRect(-5, -28 + bob, 10, 12);
+            
+            // Gorro de aviador y Goggles
+            ctx.fillStyle = '#3e2723'; // Gorro cuero
+            ctx.beginPath(); ctx.arc(0, -28 + bob, 6, Math.PI, 0); ctx.fill();
+            ctx.fillRect(-6, -28 + bob, 12, 4); // Banda
+            
+            // Lentes Goggles (Cyan brillante)
+            ctx.fillStyle = '#00ffff';
+            ctx.strokeStyle = '#b8860b'; // Borde latón
+            ctx.lineWidth = 2;
+            ctx.beginPath(); ctx.arc(2, -26 + bob, 3, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+            
+            // Bufanda al viento
+            ctx.strokeStyle = '#cc0000';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.moveTo(-2, -18 + bob);
+            let wind = Math.sin(this.animTimer * 0.2) * 5 - (this.vx * 2);
+            ctx.quadraticCurveTo(-10, -15 + bob, -15 - wind, -10 + bob + wind);
+            ctx.stroke();
+
+            // Brazo mecánico (Arma)
+            ctx.fillStyle = '#b8860b';
+            ctx.fillRect(2, -5 + bob, 18, 5); // Cañón bronce
+            ctx.fillStyle = '#555';
+            ctx.fillRect(5, -2 + bob, 10, 3); // Mecanismo
+
+            ctx.restore();
+        }
+    }
+
+    class ClockworkWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.startX = x;
+            this.vx = 1; this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x += this.vx;
+            if(Math.abs(this.x - this.startX) > 150) this.vx *= -1;
+        }
+        draw(ctx) {
+            ctx.save();
+            ctx.translate(this.x + 15, this.y + 15);
+            
+            // Cuerpo principal (Caldera)
+            ctx.fillStyle = '#800000'; // Rojo óxido
+            ctx.beginPath(); ctx.arc(0, 0, 12, 0, Math.PI*2); ctx.fill();
+            // Ventana de horno
+            ctx.fillStyle = '#ffaa00'; 
+            ctx.beginPath(); ctx.arc(0, 0, 6, 0, Math.PI*2); ctx.fill();
+            // Reja del horno
+            ctx.fillStyle = '#000';
+            ctx.fillRect(-4, -6, 2, 12); ctx.fillRect(0, -6, 2, 12); ctx.fillRect(4, -6, 2, 12);
+
+            // Piernas de araña mecánica (Pistones)
+            let legs = 4;
+            ctx.strokeStyle = '#a9a9a9'; // Acero
+            ctx.lineWidth = 2;
+            for(let i=0; i<legs; i++) {
+                let angle = (Math.PI / (legs-1)) * i + Math.PI; // Semicírculo abajo
+                let legLen = 20 + Math.sin(this.timer * 0.2 + i) * 5;
+                let lx = Math.cos(angle) * 15;
+                let ly = Math.sin(angle) * 10;
+                
+                ctx.beginPath();
+                ctx.moveTo(lx, ly);
+                ctx.lineTo(Math.cos(angle) * legLen, Math.sin(angle) * legLen + 10);
+                ctx.stroke();
+                
+                // Articulaciones (bolas de latón)
+                ctx.fillStyle = '#b8860b';
+                ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI*2); ctx.fill();
+            }
+
+            // Chimenea superior
+            ctx.fillStyle = '#333';
+            ctx.fillRect(-4, -18, 8, 10);
+            // Humo
+            if(this.timer % 10 === 0) {
+                // (Visual only implemented in main loop particles ideally)
+            }
+            
+            ctx.restore();
+        }
+    }
+
+    class OrnithopterFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.startX = x; this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 10;
+        }
+        draw(ctx) {
+            ctx.save();
+            ctx.translate(this.x + 15, this.y + 10);
+            
+            // Alas estilo Da Vinci (Estructura ósea con tela)
+            let flap = Math.sin(this.timer * 0.3) * 20;
+            
+            ctx.fillStyle = '#f5deb3'; // Tela beige
+            ctx.strokeStyle = '#8b4513'; // Madera
+            ctx.lineWidth = 2;
+
+            // Ala Izquierda
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.quadraticCurveTo(-20, -10 + flap, -40, 0 + flap); // Borde ataque
+            ctx.lineTo(-10, 10); // Borde fuga
+            ctx.closePath();
+            ctx.fill(); ctx.stroke();
+
+            // Ala Derecha
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            ctx.quadraticCurveTo(20, -10 + flap, 40, 0 + flap);
+            ctx.lineTo(10, 10);
+            ctx.closePath();
+            ctx.fill(); ctx.stroke();
+
+            // Cuerpo (Madera y latón)
+            ctx.fillStyle = '#8b5a2b';
+            ctx.beginPath(); ctx.ellipse(0, 5, 8, 12, 0, 0, Math.PI*2); ctx.fill();
+            
+            // Hélice trasera pequeña
+            ctx.save();
+            ctx.translate(0, 20);
+            ctx.rotate(this.timer);
+            ctx.fillStyle = '#a9a9a9';
+            ctx.fillRect(-10, -2, 20, 4);
+            ctx.restore();
+
+            ctx.restore();
+        }
+    }
+
+    // --- INSTANCIAS ---
+    const player = new AviatorPlayer(200, 500);
+    const walker = new ClockworkWalker(800, 440);
+    const flyer = new OrnithopterFlyer(600, 150);
+
+    const platforms = [
+        { x: -100, y: 540, width: 2000, height: 200 }, 
+        { x: 750, y: 490, width: 400, height: 20 }
+    ];
+
+    // --- SISTEMA DE PARTÍCULAS (VAPOR Y POLVO) ---
+    let particles = [];
+    function spawnCloud(x, y) {
+        particles.push({x, y, vx: Math.random()-0.5, vy: -Math.random()*2, life: 1, size: Math.random()*10+5});
+    }
+
+    // --- RENDERIZADO DE FONDO (5 CAPAS DE PARALLAX) ---
+    // Capas generadas proceduralmente
+    
+    function drawSky(ctx) {
+        const grd = ctx.createLinearGradient(0,0,0,H);
+        grd.addColorStop(0, PALETTE.skyTop);
+        grd.addColorStop(0.6, '#d68e5e');
+        grd.addColorStop(1, PALETTE.skyBot);
+        ctx.fillStyle = grd;
+        ctx.fillRect(0,0,W,H);
+        
+        // Sol poniente
+        ctx.fillStyle = '#ffaa44';
+        ctx.shadowBlur = 50; ctx.shadowColor = '#ffaa44';
+        ctx.beginPath(); ctx.arc(W/2, H-100, 150, 0, Math.PI*2); ctx.fill();
+        ctx.shadowBlur = 0;
+    }
+
+    function drawGearsBackground(ctx, camX, speed, scale, yOff) {
+        ctx.save();
+        let p = -camX * speed;
+        ctx.translate(p % 300, yOff);
+        
+        // Dibujamos varios engranajes a lo largo
+        for(let i=-2; i<6; i++) {
+            let gx = i * 300;
+            // Engranaje grande
+            drawGear(ctx, gx, 100, 12, 80 * scale, '#3e2723', globalTime * 0.01 * (i%2===0?1:-1));
+            // Engranaje pequeño conectado
+            drawGear(ctx, gx + 100*scale, 100 + 50*scale, 8, 40 * scale, '#5d4037', -globalTime * 0.02 * (i%2===0?1:-1));
+        }
+        ctx.restore();
+    }
+
+    function drawClouds(ctx, camX, speed, yPos, alpha) {
+        ctx.save();
+        let p = -camX * speed;
+        ctx.translate(p % 400, yPos);
+        ctx.fillStyle = `rgba(255, 240, 220, ${alpha})`;
+        
+        for(let i=-2; i<6; i++) {
+            let x = i * 400;
+            // Nube procedural simple (círculos)
+            ctx.beginPath();
+            ctx.arc(x, 0, 60, 0, Math.PI*2);
+            ctx.arc(x+50, -20, 70, 0, Math.PI*2);
+            ctx.arc(x+100, 0, 60, 0, Math.PI*2);
+            ctx.fill();
+        }
+        ctx.restore();
+    }
+
+    // --- LOOP PRINCIPAL ---
+    
+    function loop() {
+        globalTime++;
+        let cameraX = Math.sin(globalTime * 0.005) * 200 + 200;
+        
+        // Limpiar
+        drawSky(ctx);
+
+        // --- PARALLAX ---
+        
+        // Capa 1: Nubes muy lejanas y lentas
+        drawClouds(ctx, cameraX, 0.05, 100, 0.2);
+
+        // Capa 2: Engranajes gigantes en la niebla (Siluetas)
+        ctx.globalAlpha = 0.3;
+        drawGearsBackground(ctx, cameraX, 0.1, 1.5, 200);
+        ctx.globalAlpha = 1;
+
+        // Capa 3: Nubes medias
+        drawClouds(ctx, cameraX, 0.2, 300, 0.4);
+
+        // Capa 4: Globos aerostáticos lejanos
+        ctx.save();
+        let pBalloon = -cameraX * 0.3;
+        ctx.translate(pBalloon % 1000, 0);
+        // Dibujar globo
+        ctx.translate(800, 150 + Math.sin(globalTime * 0.02)*10);
+        ctx.fillStyle = '#8b0000'; // Globo rojo oscuro
+        ctx.beginPath(); ctx.ellipse(0, 0, 40, 50, 0, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#654321'; // Cesta
+        ctx.fillRect(-10, 60, 20, 15);
+        // Cuerdas
+        ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(-30, 10); ctx.lineTo(-10, 60); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(30, 10); ctx.lineTo(10, 60); ctx.stroke();
+        ctx.restore();
+
+        // --- JUEGO (PRIMER PLANO) ---
+        ctx.save();
+        let screenOffset = cameraX - 200;
+        ctx.translate(-screenOffset, 0);
+
+        // Plataformas (Islas flotantes con hélices)
+        platforms.forEach(p => {
+            // Textura madera
+            ctx.fillStyle = matWood;
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+            
+            // Trim de latón
+            ctx.fillStyle = matMesh;
+            ctx.fillRect(p.x, p.y, p.width, 10);
+            
+            // Hélice de sustentación debajo de la plataforma
+            if (p.width < 500) { // Solo en la pequeña
+                ctx.save();
+                ctx.translate(p.x + p.width/2, p.y + p.height);
+                ctx.fillStyle = '#333';
+                ctx.fillRect(-2, 0, 4, 20); // Eje
+                // Aspas girando
+                ctx.scale(Math.sin(globalTime * 0.5), 1); 
+                ctx.fillStyle = '#888';
+                ctx.fillRect(-30, 20, 60, 5);
+                ctx.restore();
+            }
+        });
+
+        player.update();
+        walker.update();
+        flyer.update();
+
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+
+        // Humo del jugador
+        if (globalTime % 10 === 0) spawnCloud(player.x, player.y + 10);
+
+        // Render partículas
+        ctx.fillStyle = 'rgba(255,255,255,0.4)';
+        for(let i=particles.length-1; i>=0; i--) {
+            let p = particles[i];
+            p.x += p.vx; p.y += p.vy; p.life -= 0.02; p.size += 0.2;
+            if(p.life <= 0) { particles.splice(i,1); continue; }
+            
+            ctx.beginPath(); 
+            ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); 
+            ctx.fill();
+        }
+
+        ctx.restore();
+
+        // --- CAPA 5: FOREGROUND (Tuberías pasando rápido) ---
+        ctx.save();
+        let pFore = -cameraX * 1.5;
+        ctx.translate(pFore % 800, 0);
+        ctx.fillStyle = '#1a1008'; // Muy oscuro, casi silueta
+        // Tubería vertical grande
+        ctx.fillRect(700, 0, 50, H);
+        ctx.fillRect(680, 100, 90, 20); // Junta
+        ctx.restore();
+
+        // --- POST PROCESS (VIGNETTE + GRAIN) ---
+        const vig = ctx.createRadialGradient(W/2, H/2, H/2, W/2, H/2, H);
+        vig.addColorStop(0, 'rgba(60, 40, 20, 0)');
+        vig.addColorStop(1, 'rgba(30, 20, 10, 0.6)');
+        ctx.fillStyle = vig;
+        ctx.fillRect(0,0,W,H);
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+})();
+</script>
+</body>
+</html>

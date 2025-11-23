@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Mystic Forest Engine</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 100px rgba(100, 255, 218, 0.2);
+            width: 1280px;
+            height: 720px;
+            background: #0d0221;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        /* UI Minimalista y Elegante */
+        #ui {
+            position: absolute;
+            bottom: 30px; left: 30px;
+            font-family: 'Cinzel', serif; /* Fuente estilo fantasía si está disponible, sino serif */
+            color: rgba(200, 255, 230, 0.9);
+            text-shadow: 0 0 10px rgba(100, 255, 200, 0.5);
+            pointer-events: none;
+        }
+        h1 { margin: 0; font-size: 24px; letter-spacing: 4px; font-weight: 400; }
+        p { margin: 5px 0 0 0; font-size: 14px; opacity: 0.7; font-style: italic; }
+    </style>
+    <!-- Importamos una fuente de Google Fonts para el estilo -->
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="artCanvas"></canvas>
+    <div id="ui">
+        <h1>ETHERIAL ENGINE</h1>
+        <p>Procedural Nature & Dynamic Lighting</p>
+    </div>
+</div>
+
+<script>
+// Encapsulamos todo en una IIFE para evitar conflictos de variables globales (SyntaxError: 'W' already declared)
+(function() {
+    const canvas = document.getElementById('artCanvas');
+    const ctx = canvas.getContext('2d', { alpha: false });
+    const W = 1280;
+    const H = 720;
+    canvas.width = W;
+    canvas.height = H;
+
+    // --- CONFIGURACIÓN ESTÉTICA ---
+    const PALETTE = {
+        skyTop: '#0f0518',
+        skyBot: '#2a1b3d',
+        moon: '#ffeebb',
+        ruinDark: '#1a1025',
+        ruinLight: '#3d2952',
+        leavesDark: '#0a1a15',
+        leavesLight: '#1b3b2f',
+        glow: '#64ffda',
+        enemy: '#ff4d6d'
+    };
+
+    let globalTime = 0;
+
+    // --- UTILIDADES MATEMÁTICAS ---
+    const rand = (min, max) => Math.random() * (max - min) + min;
+    
+    // --- CLASE PARA LA "BUFANDA" (FÍSICA DE TELAS SIMPLE) ---
+    class Scarf {
+        constructor(length, segments, color) {
+            this.nodes = [];
+            this.length = length;
+            this.color = color;
+            for(let i=0; i<segments; i++) {
+                this.nodes.push({x: 0, y: 0});
+            }
+        }
+        
+        update(headX, headY, vx) {
+            // El primer nodo sigue a la cabeza
+            this.nodes[0].x = headX;
+            this.nodes[0].y = headY;
+            
+            // Los demás siguen al anterior con "drag"
+            for(let i=1; i<this.nodes.length; i++) {
+                let node = this.nodes[i];
+                let prev = this.nodes[i-1];
+                
+                // Física de arrastre básica + gravedad suave + viento
+                let dx = prev.x - node.x;
+                let dy = prev.y - node.y;
+                
+                // Viento oscilante
+                let wind = Math.sin(globalTime * 0.05 + i) * 2 - (vx * 2); // El viento reacciona a la velocidad
+                
+                node.x += dx * 0.3 + wind * 0.1;
+                node.y += dy * 0.3 + 0.5; // Gravedad leve
+                
+                // Constraint de distancia (evita que se estire infinito)
+                let dist = Math.hypot(dx, dy);
+                if (dist > 10) {
+                    let angle = Math.atan2(dy, dx);
+                    node.x = prev.x - Math.cos(angle) * 10;
+                    node.y = prev.y - Math.sin(angle) * 10;
+                }
+            }
+        }
+        
+        draw(ctx) {
+            ctx.beginPath();
+            ctx.moveTo(this.nodes[0].x, this.nodes[0].y);
+            // Curva cuadrática suave a través de los nodos
+            for (let i = 1; i < this.nodes.length - 1; i++) {
+                let xc = (this.nodes[i].x + this.nodes[i + 1].x) / 2;
+                let yc = (this.nodes[i].y + this.nodes[i + 1].y) / 2;
+                ctx.quadraticCurveTo(this.nodes[i].x, this.nodes[i].y, xc, yc);
+            }
+            ctx.quadraticCurveTo(
+                this.nodes[this.nodes.length-1].x, 
+                this.nodes[this.nodes.length-1].y, 
+                this.nodes[this.nodes.length-1].x, 
+                this.nodes[this.nodes.length-1].y
+            );
+            
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = this.color;
+            ctx.lineCap = 'round';
+            ctx.stroke();
+            
+            ctx.lineWidth = 1; // reset
+        }
+    }
+
+    // --- ENTIDADES ---
+
+    class MysticPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 24; this.height = 40;
+            this.vx = 0; this.vy = 0;
+            this.facingRight = true;
+            this.stateTimer = 0;
+            this.state = 'wait';
+            
+            // Componente Visual: La bufanda mágica
+            this.scarf = new Scarf(50, 6, '#64ffda');
+        }
+
+        update() {
+            this.stateTimer++;
+            
+            // IA Mock original
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) {
+                    this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left';
+                    this.stateTimer = 0;
+                }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3; this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3; this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) this.state = 'walk_right';
+            if(this.x > 600) this.state = 'walk_left';
+
+            // Actualizar Bufanda
+            let headX = this.x + 12 + (this.facingRight ? -4 : 4);
+            let headY = this.y + 10;
+            this.scarf.update(headX, headY, this.vx);
+        }
+
+        draw(ctx) {
+            // Sombra en el suelo
+            ctx.fillStyle = 'rgba(0,0,0,0.4)';
+            ctx.beginPath();
+            ctx.ellipse(this.x + 12, this.y + 40, 10, 3, 0, 0, Math.PI*2);
+            ctx.fill();
+
+            // Dibujar Bufanda detrás
+            this.scarf.draw(ctx);
+
+            ctx.save();
+            ctx.translate(this.x + 12, this.y + 20); // Centro
+            if(!this.facingRight) ctx.scale(-1, 1);
+
+            // Cuerpo (Silueta tipo túnica)
+            ctx.fillStyle = '#1c1c2e'; // Túnica oscura
+            ctx.beginPath();
+            ctx.moveTo(-6, -10); // Hombro I
+            ctx.lineTo(6, -10);  // Hombro D
+            
+            // Animación de caminar (túnica moviéndose)
+            let walkCycle = Math.sin(globalTime * 0.2) * 4;
+            if(Math.abs(this.vx) < 0.1) walkCycle = 0;
+            
+            ctx.lineTo(8 + walkCycle, 20); // Base D
+            ctx.lineTo(-8 + walkCycle, 20); // Base I
+            ctx.fill();
+
+            // Detalles dorados túnica
+            ctx.strokeStyle = '#ffd700';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(-4, -10); ctx.lineTo(-4, 20);
+            ctx.moveTo(4, -10); ctx.lineTo(4, 20);
+            ctx.stroke();
+
+            // Cabeza (Capucha)
+            ctx.fillStyle = '#2d2d44';
+            ctx.beginPath();
+            ctx.moveTo(0, -22); // Punta
+            ctx.quadraticCurveTo(10, -10, 8, 0); // Lado Der
+            ctx.lineTo(-8, 0); // Cuello
+            ctx.quadraticCurveTo(-10, -10, 0, -22); // Lado Izq
+            ctx.fill();
+
+            // Ojos brillantes (Misterioso)
+            ctx.fillStyle = PALETTE.glow;
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = PALETTE.glow;
+            ctx.fillRect(2, -8, 2, 2); 
+            ctx.fillRect(5, -8, 2, 2); 
+            ctx.shadowBlur = 0;
+
+            // Arma (Bastón brillante)
+            ctx.fillStyle = '#5a4a42'; // Madera
+            ctx.fillRect(6, -5, 2, 30);
+            // Orbe del bastón
+            ctx.beginPath();
+            ctx.arc(7, -8, 3, 0, Math.PI*2);
+            ctx.fillStyle = '#fff';
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#00ffff';
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+            ctx.restore();
+        }
+    }
+
+    class GolemEnemy {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.startX = x;
+            this.vx = 1; this.dir = 1; 
+            this.timer = 0;
+            
+            // Piedras flotantes que componen el golem
+            this.stones = [
+                {ox: 0, oy: 0, s: 12}, // Cuerpo
+                {ox: -10, oy: -5, s: 8}, // Hombro
+                {ox: 10, oy: -5, s: 8},  // Hombro
+                {ox: 0, oy: -15, s: 6}   // Cabeza
+            ];
+        }
+
+        update() {
+            this.timer++;
+            this.x += this.vx;
+            if (Math.abs(this.x - this.startX) > 100) this.vx *= -1;
+        }
+
+        draw(ctx) {
+            ctx.save();
+            ctx.translate(this.x + 15, this.y + 15);
+            
+            // Dibujar aura corrupta
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = PALETTE.enemy;
+
+            this.stones.forEach((stone, i) => {
+                // Movimiento independiente de cada piedra (Flotación mágica)
+                let floatY = Math.sin(this.timer * 0.05 + i) * 3;
+                let floatX = Math.cos(this.timer * 0.03 + i) * 2;
+                
+                ctx.fillStyle = '#4a3b52'; // Color piedra oscura
+                ctx.fillRect(stone.ox + floatX - stone.s/2, stone.oy + floatY - stone.s/2, stone.s, stone.s);
+                
+                // Grietas brillantes
+                ctx.fillStyle = PALETTE.enemy;
+                ctx.fillRect(stone.ox + floatX, stone.oy + floatY, 2, 2);
+            });
+            
+            ctx.shadowBlur = 0;
+            ctx.restore();
+        }
+    }
+
+    class WispFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.startX = x; this.timer = 0;
+            this.trail = [];
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1;
+            
+            // Guardar estela
+            this.trail.push({x: this.x, y: this.y, alpha: 1});
+            if(this.trail.length > 20) this.trail.shift();
+            this.trail.forEach(t => t.alpha -= 0.05);
+        }
+        draw(ctx) {
+            // Dibujar Estela
+            ctx.save();
+            this.trail.forEach((point, i) => {
+                ctx.beginPath();
+                ctx.arc(point.x + 15, point.y + 10, 5 - (i*0.1), 0, Math.PI*2);
+                ctx.fillStyle = `rgba(255, 100, 150, ${point.alpha * 0.5})`;
+                ctx.fill();
+            });
+            ctx.restore();
+
+            // Dibujar Núcleo
+            let hover = Math.sin(this.timer * 0.1) * 5;
+            ctx.translate(this.x + 15, this.y + 10 + hover);
+            
+            // Glow intenso
+            let grd = ctx.createRadialGradient(0,0, 2, 0,0, 15);
+            grd.addColorStop(0, '#fff');
+            grd.addColorStop(0.4, '#ff4d6d');
+            grd.addColorStop(1, 'rgba(255, 77, 109, 0)');
+            
+            ctx.fillStyle = grd;
+            ctx.beginPath(); ctx.arc(0,0, 15, 0, Math.PI*2); ctx.fill();
+            
+            // Núcleo sólido pequeño
+            ctx.fillStyle = '#fff';
+            ctx.beginPath(); ctx.arc(0,0, 3, 0, Math.PI*2); ctx.fill();
+            
+            // Anillos giratorios
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 1;
+            ctx.rotate(this.timer * 0.1);
+            ctx.beginPath(); ctx.ellipse(0, 0, 10, 4, 0, 0, Math.PI*2); ctx.stroke();
+            ctx.rotate(Math.PI/2);
+            ctx.beginPath(); ctx.ellipse(0, 0, 10, 4, 0, 0, Math.PI*2); ctx.stroke();
+            
+            ctx.resetTransform(); // Cuidado con los translates acumulados
+        }
+    }
+
+    // --- GENERACIÓN PROCEDURAL DE ARTE DE FONDO ---
+    
+    // Función para dibujar árboles fractales (Recursiva)
+    function drawTree(ctx, x, y, len, angle, branchWidth, depth) {
+        ctx.beginPath();
+        ctx.save();
+        ctx.strokeStyle = '#000'; // Silueta
+        ctx.fillStyle = '#000';
+        ctx.lineWidth = branchWidth;
+        ctx.translate(x, y);
+        ctx.rotate(angle * Math.PI/180);
+        ctx.moveTo(0,0);
+        ctx.lineTo(0, -len);
+        ctx.stroke();
+
+        if (len < 10) { // Hojas
+            ctx.beginPath();
+            ctx.arc(0, -len, rand(3,6), 0, Math.PI/2); 
+            ctx.fill();
+            ctx.restore();
+            return;
+        }
+
+        // Sub-ramas
+        drawTree(ctx, 0, -len, len * 0.75, angle + rand(15,25), branchWidth * 0.7, depth+1);
+        drawTree(ctx, 0, -len, len * 0.75, angle - rand(15,25), branchWidth * 0.7, depth+1);
+        ctx.restore();
+    }
+    
+    // Generar capas en canvas offscreen para rendimiento
+    function createLayer(width, height, type) {
+        const c = document.createElement('canvas');
+        c.width = width; c.height = height;
+        const x = c.getContext('2d');
+        
+        if (type === 'sky') {
+            const grd = x.createLinearGradient(0,0,0,height);
+            grd.addColorStop(0, PALETTE.skyTop);
+            grd.addColorStop(1, PALETTE.skyBot);
+            x.fillStyle = grd;
+            x.fillRect(0,0,width,height);
+            
+            // Estrellas
+            x.fillStyle = '#fff';
+            for(let i=0; i<100; i++) {
+                x.globalAlpha = rand(0.1, 0.8);
+                x.beginPath(); x.arc(rand(0, width), rand(0, height/2), rand(0.5, 1.5), 0, Math.PI*2); x.fill();
+            }
+            x.globalAlpha = 1;
+            
+            // Luna gigante
+            x.fillStyle = PALETTE.moon;
+            x.beginPath(); x.arc(width/2 + 200, 150, 60, 0, Math.PI*2); x.fill();
+            // Cráteres suaves
+            x.globalCompositeOperation = 'destination-out';
+            x.beginPath(); x.arc(width/2 + 180, 160, 10, 0, Math.PI*2); x.fill();
+            x.beginPath(); x.arc(width/2 + 220, 140, 15, 0, Math.PI*2); x.fill();
+            x.globalCompositeOperation = 'source-over';
+        }
+        
+        if (type === 'ruins_bg') {
+            x.fillStyle = PALETTE.ruinDark;
+            for(let i=0; i<width; i+=100) {
+                // Pilares rotos
+                let h = rand(100, 400);
+                x.fillRect(i, height - h, rand(40, 80), h);
+                // Arcos
+                if (Math.random() > 0.5) {
+                    x.beginPath();
+                    x.arc(i + 30, height - h, 30, Math.PI, 0);
+                    x.fill();
+                }
+            }
+        }
+
+        if (type === 'forest_mid') {
+            x.strokeStyle = PALETTE.ruinLight;
+            // Dibujar árboles simplificados para midground
+            for(let i=0; i<width; i+=150) {
+                x.fillStyle = '#1e112a';
+                let treeH = rand(200, 500);
+                x.beginPath();
+                x.moveTo(i, height);
+                x.lineTo(i + 20, height - treeH);
+                x.lineTo(i + 40, height);
+                x.fill();
+                
+                // Copa del árbol (círculos abstractos)
+                x.fillStyle = '#2d1b3e';
+                x.beginPath(); x.arc(i+20, height-treeH, rand(30, 60), 0, Math.PI*2); x.fill();
+            }
+        }
+        
+        return c;
+    }
+
+    // Pre-renderizar capas estáticas
+    const bgSky = createLayer(W, H, 'sky');
+    const bgRuins = createLayer(W, H, 'ruins_bg'); // Este lo repetiremos
+    
+    // --- ESTADO DEL JUEGO ---
+    const player = new MysticPlayer(200, 500);
+    const walker = new GolemEnemy(800, 440);
+    const flyer = new WispFlyer(600, 200);
+
+    const platforms = [
+        { x: -100, y: 540, width: 2000, height: 200 }, // Suelo principal
+        { x: 750, y: 490, width: 400, height: 20 }
+    ];
+
+    let camera = {x:0, y:0};
+
+    // --- LOOP PRINCIPAL ---
+    function loop() {
+        globalTime++;
+        camera.x = Math.sin(globalTime * 0.005) * 200 + 200;
+
+        // Limpiar
+        ctx.drawImage(bgSky, 0, 0);
+
+        // --- BACKGROUND PARALLAX ---
+        
+        // Capa 1: Ruinas lejanas (Lento)
+        ctx.save();
+        let p1 = -camera.x * 0.1;
+        ctx.translate(p1 % W, 0);
+        // Dibujamos 2 veces para loop infinito barato
+        ctx.globalAlpha = 0.6;
+        ctx.drawImage(bgRuins, -W, 0); 
+        ctx.drawImage(bgRuins, 0, 0);
+        ctx.drawImage(bgRuins, W, 0);
+        ctx.restore();
+
+        // Capa 2: Árboles silueta (Medio)
+        ctx.save();
+        let p2 = -camera.x * 0.3;
+        ctx.translate(p2, 0);
+        
+        // Generación procedural en tiempo real (solo lo que se ve)
+        // Para simular bosque denso sin crear miles de objetos
+        let startTree = Math.floor(-p2 / 200) - 2;
+        let endTree = startTree + 10;
+        
+        ctx.fillStyle = '#0f0510';
+        for(let i=startTree; i<endTree; i++) {
+            let tx = i * 200;
+            // Viento en árboles: Skew transformation
+            let wind = Math.sin(globalTime * 0.01 + i) * 0.1;
+            
+            ctx.save();
+            ctx.translate(tx, H);
+            ctx.transform(1, 0, wind, 1, 0, 0); // Skew X
+            
+            // Tronco
+            ctx.fillRect(0, -300 - (Math.sin(i)*100), 40, 400);
+            
+            // Ramas colgadas (Vines)
+            ctx.strokeStyle = '#1a0b20';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(10, -250);
+            // Curva de liana
+            ctx.quadraticCurveTo(30 + (wind*100), -150, 10, -50);
+            ctx.stroke();
+            
+            ctx.restore();
+        }
+        ctx.restore();
+
+        // --- GOD RAYS (VOLUMETRIC LIGHTING) ---
+        // Truco: Rayos dibujados con gradientes rotados en modo 'overlay'
+        ctx.save();
+        ctx.globalCompositeOperation = 'overlay';
+        ctx.translate(W/2, -100);
+        ctx.rotate(Math.sin(globalTime * 0.005) * 0.2);
+        
+        const rayGrad = ctx.createLinearGradient(0, 0, 0, 800);
+        rayGrad.addColorStop(0, 'rgba(200, 255, 255, 0)');
+        rayGrad.addColorStop(0.5, 'rgba(200, 255, 255, 0.15)');
+        rayGrad.addColorStop(1, 'rgba(200, 255, 255, 0)');
+        
+        for(let r=0; r<5; r++) {
+            ctx.rotate(0.3); // Espaciar rayos
+            ctx.fillStyle = rayGrad;
+            // Rayo triangular ancho
+            ctx.beginPath();
+            ctx.moveTo(0,0);
+            ctx.lineTo(-100, 1000);
+            ctx.lineTo(100, 1000);
+            ctx.fill();
+        }
+        ctx.restore();
+
+        // --- ESCENARIO DEL JUEGO ---
+        ctx.save();
+        
+        // Mover escena segun camara (Mock visual)
+        let screenOffset = camera.x - 200;
+        ctx.translate(-screenOffset, 0);
+
+        // Update entidades
+        player.update();
+        walker.update();
+        flyer.update();
+
+        // DIBUJAR PLATAFORMAS (Islas flotantes)
+        platforms.forEach(p => {
+            // Cuerpo de la isla (Piedra)
+            const stonePattern = ctx.createLinearGradient(p.x, p.y, p.x, p.y + p.height);
+            stonePattern.addColorStop(0, '#2d1b3e');
+            stonePattern.addColorStop(1, '#0d0221');
+            ctx.fillStyle = stonePattern;
+            
+            // Forma irregular para que parezca roca, no rectangulo
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            ctx.lineTo(p.x + p.width, p.y);
+            // Borde inferior irregular
+            for(let i=p.width; i>=0; i-=20) {
+                let jagged = Math.sin(i * 0.1) * 10 + Math.random()*5;
+                ctx.lineTo(p.x + i, p.y + p.height + jagged);
+            }
+            ctx.closePath();
+            ctx.fill();
+
+            // Césped en la parte superior (Pasto individual)
+            ctx.strokeStyle = '#4a9c80'; // Verde azulado
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            for(let i=0; i<p.width; i+=5) {
+                if(Math.random() > 0.5) {
+                    let gx = p.x + i;
+                    let gy = p.y;
+                    let wind = Math.sin(globalTime * 0.1 + gx) * 3;
+                    ctx.moveTo(gx, gy);
+                    ctx.quadraticCurveTo(gx + wind, gy - 5, gx + wind*2, gy - 10 - Math.random()*5);
+                }
+            }
+            ctx.stroke();
+            
+            // Raíces colgando abajo
+            ctx.strokeStyle = '#2d1b3e';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for(let i=20; i<p.width; i+=60) {
+                let rx = p.x + i;
+                let ry = p.y + p.height;
+                ctx.moveTo(rx, ry);
+                ctx.bezierCurveTo(rx-10, ry+30, rx+10, ry+60, rx, ry+100);
+            }
+            ctx.stroke();
+        });
+
+        // SOMBRAS DE OBJETOS
+        // Sombra suave en las plataformas para dar profundidad
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.fillStyle = 'rgba(0,0,0,0.3)';
+        platforms.forEach(p => {
+             ctx.fillRect(p.x, p.y + 10, p.width, p.height);
+        });
+        ctx.globalCompositeOperation = 'source-over';
+
+        // ENTIDADES
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+
+        // --- PARTÍCULAS AMBIENTALES (Luciernagas) ---
+        // Generadas al vuelo para el efecto
+        ctx.fillStyle = '#64ffda';
+        for(let i=0; i<20; i++) {
+            let px = (globalTime * (10 + i) + i*1000) % (W + 500) - screenOffset; 
+            // Truco matematico para posicion pseudo-aleatoria basada en tiempo
+            let py = (Math.sin(globalTime * 0.01 + i) * 300) + 300;
+            
+            // Solo dibujar si está en pantalla
+            if (px > -screenOffset && px < W - screenOffset) {
+                let alpha = Math.abs(Math.sin(globalTime * 0.05 + i));
+                ctx.globalAlpha = alpha;
+                ctx.fillRect(px, py, 2, 2);
+            }
+        }
+        ctx.globalAlpha = 1;
+
+        ctx.restore(); // Fin de la escena de juego
+
+        // --- POST-PROCESADO: VIÑETA Y COLOR GRADING ---
+        // Gradiente radial inverso para oscurecer esquinas
+        const vignette = ctx.createRadialGradient(W/2, H/2, H/3, W/2, H/2, H);
+        vignette.addColorStop(0, 'rgba(0,0,0,0)');
+        vignette.addColorStop(1, 'rgba(10, 5, 20, 0.8)');
+        ctx.fillStyle = vignette;
+        ctx.fillRect(0,0,W,H);
+
+        // Tinte morado general (Color Grading)
+        ctx.globalCompositeOperation = 'soft-light';
+        ctx.fillStyle = 'rgba(100, 0, 255, 0.1)';
+        ctx.fillRect(0,0,W,H);
+        ctx.globalCompositeOperation = 'source-over';
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+})();
+</script>
+</body>
+</html>

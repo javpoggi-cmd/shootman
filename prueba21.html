@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Neon Space Redesign (Cam Follow)</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000005;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 50px rgba(0, 200, 255, 0.3);
+            border: 2px solid #222;
+            background: #000;
+            width: 1280px;
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            background-color: #020207; 
+            width: 100%;
+            height: 100%;
+        }
+        #scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.15) 0px,
+                rgba(0, 0, 0, 0.15) 1px,
+                transparent 1px,
+                transparent 3px
+            );
+            pointer-events: none;
+            z-index: 100;
+            mix-blend-mode: overlay;
+        }
+        #debug-ui {
+            position: absolute; top: 10px; left: 10px; color: #00ffff; z-index: 120;
+            background: rgba(0,0,0,0.5); padding: 10px; border: 1px solid #00ffff;
+            text-shadow: 0 0 5px #00ffff;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="testCanvas"></canvas>
+    <div id="scanlines"></div>
+    <div id="debug-ui">
+        <h3>DISEÑO: NEON SPACE VOYAGE</h3>
+        <p>Cámara: SEGUIMIENTO SUAVE</p>
+        <p>Estado: Jugador controla el scroll</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    const PALETTE = {
+        neonCyan: '#00ffff',
+        neonMagenta: '#ff00ff',
+        neonOrange: '#ff5500',
+        neonRed: '#ff0033',
+        deepBlue: '#110044',
+        spaceDark: '#02020c',
+        magmaLight: '#ffaa00',
+        magmaDark: '#330000'
+    };
+
+    function applyGlow(ctx, color, blur = 15) {
+        ctx.shadowColor = color;
+        ctx.shadowBlur = blur;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
+    }
+
+    function resetGlow(ctx) {
+        ctx.shadowBlur = 0;
+    }
+
+    const particles = [];
+    class Particle {
+        constructor(x, y, type) {
+            this.x = x; this.y = y;
+            this.type = type;
+            this.life = 1.0;
+            if(type === 'engine') {
+                this.vx = (Math.random() - 2) * 2;
+                this.vy = Math.random() * 2 + 1;
+                this.size = Math.random() * 2 + 1;
+                this.color = PALETTE.neonCyan;
+            } else if (type === 'dust') {
+                this.vx = (Math.random() - 0.8) * 0.5;
+                this.vy = (Math.random() - 0.5) * 0.5;
+                this.size = Math.random() * 2 + 0.5;
+                this.color = '#ffffff';
+            } else if (type === 'magma') {
+                 this.vx = (Math.random() - 0.5) * 1;
+                 this.vy = -Math.random() * 3;
+                 this.size = Math.random() * 1.5 + 0.5;
+            }
+        }
+        update() {
+            this.x += this.vx; this.y += this.vy;
+            this.life -= this.type === 'dust' ? 0.005 : 0.02;
+        }
+        draw(ctx) {
+            ctx.save();
+            ctx.globalAlpha = this.life;
+            if(this.type === 'magma') {
+                 applyGlow(ctx, PALETTE.neonOrange, 10);
+                 ctx.fillStyle = PALETTE.neonOrange;
+            } else {
+                 applyGlow(ctx, this.color, this.type === 'engine' ? 10 : 2);
+                 ctx.fillStyle = this.color;
+            }
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+    }
+
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 24; this.height = 40;
+            this.vx = 0; this.animTimer = 0; this.facingRight = true;
+            this.state = 'wait'; this.stateTimer = 0;
+        }
+
+        update() {
+            this.animTimer++; this.stateTimer++;
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_right') {
+                this.vx = 4; // Un poco más rápido para notar el scroll
+                this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 180) { this.state = 'wait'; this.stateTimer = 0; }
+                if(this.animTimer % 3 === 0) particles.push(new Particle(this.x + 12, this.y + 35, 'engine'));
+            } else if (this.state === 'walk_left') {
+                this.vx = -4; 
+                this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 180) { this.state = 'wait'; this.stateTimer = 0; }
+                if(this.animTimer % 3 === 0) particles.push(new Particle(this.x + 12, this.y + 35, 'engine'));
+            }
+            
+            // LÍMITES AMPLIADOS para probar la cámara
+            if(this.x < -200) { this.x = -200; this.state = 'walk_right'; }
+            if(this.x > 1400) { this.x = 1400; this.state = 'walk_left'; }
+        }
+
+        draw(ctx) {
+            ctx.save();
+            ctx.translate(this.x + this.width/2, this.y + this.height/2);
+            if (!this.facingRight) ctx.scale(-1, 1);
+            let lean = Math.abs(this.vx) > 1 ? 0.1 : 0;
+            ctx.rotate(lean);
+
+            applyGlow(ctx, PALETTE.neonCyan, 20);
+
+            let bodyGrad = ctx.createLinearGradient(0, -20, 0, 20);
+            bodyGrad.addColorStop(0, '#00aaff');
+            bodyGrad.addColorStop(1, '#004488');
+            ctx.fillStyle = bodyGrad;
+            
+            ctx.beginPath();
+            ctx.moveTo(-10, -15); ctx.lineTo(10, -15);
+            ctx.lineTo(8, 10); ctx.lineTo(-8, 10);
+            ctx.closePath(); ctx.fill();
+
+            let visorGrad = ctx.createLinearGradient(0, -20, 0, -10);
+            visorGrad.addColorStop(0, PALETTE.neonMagenta);
+            visorGrad.addColorStop(1, PALETTE.deepBlue);
+            ctx.fillStyle = visorGrad;
+            ctx.fillRect(-8, -22, 16, 12);
+            applyGlow(ctx, PALETTE.neonCyan, 10);
+            ctx.fillStyle = '#fff'; ctx.fillRect(-6, -18, 12, 4);
+
+            resetGlow(ctx);
+            ctx.fillStyle = bodyGrad;
+            let legAnim = Math.sin(this.animTimer * 0.5) * 8;
+            if (Math.abs(this.vx) < 0.5) legAnim = 0;
+            
+            ctx.save(); ctx.translate(-5, 10); ctx.rotate(legAnim * 0.05);
+            ctx.fillRect(-3, 0, 6, 15); ctx.restore();
+            ctx.save(); ctx.translate(5, 10); ctx.rotate(-legAnim * 0.05);
+            ctx.fillRect(-3, 0, 6, 15); ctx.restore();
+
+            applyGlow(ctx, PALETTE.neonMagenta, 15);
+            ctx.fillStyle = '#333'; ctx.fillRect(5, -5, 18, 8);
+            ctx.fillStyle = PALETTE.neonMagenta; ctx.fillRect(20, -3, 4, 4);
+
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 30;
+            this.vx = 2; this.dir = 1; this.timer = 0; this.state = 'walk'; this.startX = x; this.waitTimer = 0;
+        }
+
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) { this.state = 'wait'; this.waitTimer = 60; }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) { this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk'; }
+            }
+        }
+
+        draw(ctx) {
+            let drawX = this.x + this.width/2;
+            let drawY = this.y + this.height/2;
+            let anim = Math.sin(this.timer * 0.2);
+
+            ctx.save();
+            ctx.translate(drawX, drawY);
+            
+            applyGlow(ctx, PALETTE.neonRed, 25);
+            
+            let coreGrad = ctx.createRadialGradient(0,0, 5, 0,0, 15);
+            coreGrad.addColorStop(0, '#fff');
+            coreGrad.addColorStop(0.3, PALETTE.neonOrange);
+            coreGrad.addColorStop(1, PALETTE.magmaDark);
+            ctx.fillStyle = coreGrad;
+            ctx.beginPath(); ctx.moveTo(0, -15); ctx.lineTo(15, 0); ctx.lineTo(0, 15); ctx.lineTo(-15, 0); ctx.closePath(); ctx.fill();
+
+            applyGlow(ctx, PALETTE.neonRed, 10);
+            ctx.fillStyle = '#fff'; ctx.fillRect(-5 + anim*2, -5, 10, 6);
+
+            ctx.strokeStyle = PALETTE.neonOrange;
+            ctx.lineWidth = 3;
+            ctx.save(); ctx.rotate(this.timer * 0.1);
+            ctx.beginPath(); ctx.moveTo(-20, 0); ctx.lineTo(20, 0); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(0, -20); ctx.lineTo(0, 20); ctx.stroke();
+            ctx.restore();
+
+            resetGlow(ctx);
+            ctx.strokeStyle = '#550000';
+            ctx.beginPath();
+            ctx.moveTo(-10, 10); ctx.lineTo(-20, 25 + anim*5);
+            ctx.moveTo(10, 10); ctx.lineTo(20, 25 - anim*5);
+            ctx.stroke();
+
+            ctx.restore();
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 20;
+            this.startX = x; this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1;
+            if(this.timer % 4 === 0) particles.push(new Particle(this.x + 15, this.y + 20, 'engine'));
+        }
+
+        draw(ctx) {
+            let drawX = this.x + this.width/2;
+            let drawY = this.y + this.height/2;
+            let flap = Math.sin(this.timer * 0.8) * 5;
+
+            ctx.save();
+            ctx.translate(drawX, drawY);
+
+            applyGlow(ctx, PALETTE.neonMagenta, 20);
+
+            let hullGrad = ctx.createLinearGradient(-15, 0, 15, 0);
+            hullGrad.addColorStop(0, PALETTE.neonMagenta);
+            hullGrad.addColorStop(1, PALETTE.deepBlue);
+            ctx.fillStyle = hullGrad;
+
+            ctx.beginPath();
+            ctx.moveTo(0, -10);
+            ctx.lineTo(20, 5 + flap);
+            ctx.lineTo(0, 8);
+            ctx.lineTo(-20, 5 + flap);
+            ctx.closePath();
+            ctx.fill();
+            
+            ctx.strokeStyle = PALETTE.neonCyan; ctx.lineWidth = 1;
+            ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(0, 8); ctx.stroke();
+            
+            ctx.restore();
+        }
+    }
+
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 460); 
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: -500, y: 540, width: 2500, height: 200 }, // Plataforma suelo extendida
+        { x: 750, y: 490, width: 400, height: 25 },
+        { x: 100, y: 400, width: 200, height: 25 }     // Plataforma extra para referencia
+    ];
+
+    function drawBackground(ctx, cameraX, cameraY) {
+        let bgGrad = ctx.createRadialGradient(GAME_WIDTH/2, GAME_HEIGHT/2, 100, GAME_WIDTH/2, GAME_HEIGHT/2, 800);
+        bgGrad.addColorStop(0, PALETTE.deepBlue);
+        bgGrad.addColorStop(1, PALETTE.spaceDark);
+        ctx.fillStyle = bgGrad;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        resetGlow(ctx);
+        ctx.fillStyle = '#ffffff';
+        for(let i=0; i<100; i++) {
+            let sx = (i * 137) % GAME_WIDTH;
+            let sy = (i * 263) % GAME_HEIGHT;
+            if (Math.random() > 0.95) applyGlow(ctx, '#fff', 5); else resetGlow(ctx);
+            ctx.fillRect(sx, sy, Math.random()*2, Math.random()*2);
+        }
+
+        const layers = [
+            { speed: 0.02, colorScale: 1.0, density: 20, yOffset: 550, glow: '#220044' },
+            { speed: 0.1, colorScale: 0.9, density: 15, yOffset: 450, glow: '#5500aa' },
+            { speed: 0.25, colorScale: 0.7, density: 12, yOffset: 350, glow: PALETTE.neonCyan },
+            { speed: 0.5, colorScale: 0.5, density: 8, yOffset: 250, glow: PALETTE.neonMagenta },
+            { speed: 0.8, colorScale: 0.3, density: 5, yOffset: 150, glow: PALETTE.deepBlue },
+        ];
+        
+        layers.forEach((layer, index) => {
+            ctx.save();
+            let parallaxX = -cameraX * layer.speed;
+            let offsetX = parallaxX % (GAME_WIDTH * 2); 
+            ctx.translate(offsetX, 0);
+            
+            applyGlow(ctx, layer.glow, 15 * layer.colorScale);
+
+            for(let rep = -1; rep <= 1; rep++) {
+                let repOffset = rep * GAME_WIDTH * 4;
+                for (let i = 0; i < layer.density * 3; i++) {
+                    let pseudoRnd = Math.sin(i * 134.5 + index * 32.1);
+                    let x = (i * (GAME_WIDTH * 2 / (layer.density*3))) + repOffset;
+                    let baseH = (pseudoRnd * 100 + 50) * layer.colorScale;
+                    let y = GAME_HEIGHT - layer.yOffset - baseH + Math.cos(i)*50;
+                    let w = Math.abs(Math.sin(i)*150) + 50;
+
+                    let r = Math.floor(30 * layer.colorScale);
+                    let g = Math.floor(10 * layer.colorScale);
+                    let b = Math.floor(80 * layer.colorScale);
+                    ctx.fillStyle = `rgb(${r},${g},${b})`;
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(x, y + baseH*2);
+                    ctx.lineTo(x + w/2, y);
+                    ctx.lineTo(x + w, y + baseH*2);
+                    ctx.fill();
+
+                    ctx.strokeStyle = layer.glow; ctx.lineWidth = 2 * layer.colorScale;
+                    if(index > 2) ctx.stroke();
+                }
+            }
+            ctx.restore();
+            ctx.fillStyle = `rgba(0, 2, 20, ${0.05 * (index+1)})`;
+            ctx.fillRect(0,0, GAME_WIDTH, GAME_HEIGHT);
+        });
+    }
+
+    function drawForeground(ctx, cameraX) {
+        ctx.save();
+        let parallaxX = -cameraX * 1.2; 
+        let offsetX = parallaxX % GAME_WIDTH;
+        ctx.translate(offsetX, 0);
+        resetGlow(ctx);
+        ctx.fillStyle = '#000';
+        ctx.globalAlpha = 0.8;
+        for(let rep = -1; rep <= 1; rep++) {
+             let repOffset = rep * GAME_WIDTH;
+             ctx.fillRect(repOffset + 100, GAME_HEIGHT - 50, 200, 50);
+             ctx.fillRect(repOffset + 600, GAME_HEIGHT - 80, 150, 80);
+        }
+        ctx.restore();
+    }
+
+    function drawMap(ctx) {
+        platforms.forEach(p => {
+            ctx.save();
+            applyGlow(ctx, PALETTE.neonOrange, 40);
+            ctx.fillStyle = '#000';
+            ctx.fillRect(p.x + 20, p.y + 15, p.width - 40, p.height);
+
+            resetGlow(ctx);
+
+            let rockGrad = ctx.createLinearGradient(p.x, p.y, p.x, p.y + p.height);
+            rockGrad.addColorStop(0, '#221111');
+            rockGrad.addColorStop(1, '#0a0505');
+            ctx.fillStyle = rockGrad;
+            
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            for(let i = p.x; i <= p.x + p.width; i+=20) {
+                 ctx.lineTo(i, p.y + Math.sin(i*0.1)*2);
+            }
+            ctx.lineTo(p.x + p.width, p.y + p.height);
+            ctx.lineTo(p.x, p.y + p.height);
+            ctx.fill();
+            
+            ctx.strokeStyle = PALETTE.neonOrange;
+            ctx.lineWidth = 2;
+            applyGlow(ctx, PALETTE.neonRed, 10);
+            ctx.beginPath();
+            // 1. Crear y guardar las grietas una sola vez (para que no salten de lugar)
+            if (!p.cracks) {
+                p.cracks = [];
+                const numCracks = p.width / 30;
+                for(let i = 0; i < numCracks; i++) {
+                    p.cracks.push({
+                        x: p.x + Math.random() * p.width,
+                        y: p.y + Math.random() * p.height,
+                        // TAMAÑO: Reducido (antes era 40, ahora 15 para que sean mas chicas)
+                        lenX: (Math.random()-0.5) * 15, 
+                        lenY: (Math.random()-0.5) * 15,
+                        // VELOCIDAD: Un offset aleatorio para el parpadeo
+                        blinkOffset: Math.random() * 100
+                    });
+                }
+            }
+
+            // 2. Dibujar las grietas guardadas
+            p.cracks.forEach(c => {
+                // PARPADEO LENTO: Usamos gameTime * 0.05 para que sea suave
+                let blinkSpeed = 0.05; 
+                let brightness = Math.sin(gameTime * blinkSpeed + c.blinkOffset);
+
+                // Solo dibujamos la línea si la onda es positiva (parpadeo)
+                if (brightness > 0) {
+                    ctx.moveTo(c.x, c.y);
+                    ctx.lineTo(c.x + c.lenX, c.y + c.lenY);
+                }
+
+                // 3. PARTÍCULAS (Separado del dibujo para no afectar su cantidad)
+                // Mantenemos la lógica original: probabilidad alta de spawn independiente de si se ve la linea
+                if (Math.random() > 0.95) { // Ajustado a 0.95 para evitar saturación excesiva en puntos fijos
+                    particles.push(new Particle(c.x, p.y+5, 'magma'));
+                }
+            });
+            ctx.stroke();
+
+            ctx.strokeStyle = PALETTE.neonOrange; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x + p.width, p.y); ctx.stroke();
+
+            ctx.restore();
+        });
+    }
+
+    // --- BUCLE PRINCIPAL MODIFICADO PARA SEGUIR AL JUGADOR ---
+    let camera = { x: 0, y: 0 };
+    let gameTime = 0;
+
+    function loop() {
+        gameTime++;
+        
+        // 1. Actualizar Entidades (Primero movemos al personaje)
+        player.update();
+        walker.update();
+        flyer.update();
+        particles.forEach(p => p.update());
+        for(let i = particles.length -1; i >= 0; i--) { if(particles[i].life <= 0) particles.splice(i, 1); }
+
+        // 2. Lógica de Cámara "Smooth Follow" (Lerp)
+        // Calculamos dónde debería estar la cámara para centrar al jugador
+        let targetCamX = player.x - GAME_WIDTH / 2 + player.width / 2;
+        
+        // Interpolamos suavemente (0.1 es la velocidad de suavizado)
+        camera.x += (targetCamX - camera.x) * 0.1;
+
+        // 3. Renderizar
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Fondo (Usa camera.x para parallax)
+        drawBackground(ctx, camera.x, camera.y);
+
+        // --- ESPACIO DEL MUNDO ---
+        ctx.save();
+        ctx.translate(-camera.x, -camera.y); 
+
+        drawMap(ctx);
+        particles.filter(p => p.type !== 'dust').forEach(p => p.draw(ctx));
+
+        walker.draw(ctx);
+        flyer.draw(ctx);
+        player.draw(ctx); // Ya no movemos al jugador artificialmente
+
+        ctx.restore();
+        // --- FIN ESPACIO DEL MUNDO ---
+
+        particles.filter(p => p.type === 'dust').forEach(p => p.draw(ctx));
+        drawForeground(ctx, camera.x);
+
+        resetGlow(ctx);
+        let vignette = ctx.createRadialGradient(GAME_WIDTH/2, GAME_HEIGHT/2, 300, GAME_WIDTH/2, GAME_HEIGHT/2, 800);
+        vignette.addColorStop(0, 'transparent');
+        vignette.addColorStop(1, 'rgba(0,0,20,0.5)');
+        ctx.fillStyle = vignette;
+        ctx.fillRect(0,0, canvas.width, canvas.height);
+
+        if(gameTime % 10 === 0) particles.push(new Particle(canvas.width, Math.random()*canvas.height, 'dust'));
+
+        requestAnimationFrame(loop);
+    }
+
+    // Iniciar
+    loop();
+
+</script>
+</body>
+</html>
