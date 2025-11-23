@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: High Production Visual Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000508; /* Fondo más oscuro y azulado */
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            /* Sombra con color más temático */
+            box-shadow: 0 0 60px rgba(0, 150, 150, 0.3), 0 0 20px rgba(255, 100, 0, 0.2);
+            border: 2px solid #1a2f38;
+            background: #000;
+            width: 1280px;
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            background-color: #00090c; /* Color base del canvas */
+            /* Eliminamos pixelated para que los gradientes y efectos sean suaves */
+            /* image-rendering: pixelated; */ 
+            width: 100%;
+            height: 100%;
+        }
+        #scanlines {
+            /* Scanlines más sutiles y tintadas para la nueva estética */
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(0, 10, 15, 0.1) 50%, rgba(0, 0, 0, 0.4) 50%), 
+                        radial-gradient(circle, rgba(255,150,0,0.05) 0%, rgba(0,20,30,0.2) 100%);
+            background-size: 100% 3px, 100% 100%;
+            pointer-events: none;
+            z-index: 10;
+            opacity: 0.7;
+        }
+        #debug-ui {
+            position: absolute; top: 10px; left: 10px; color: #00ffaa; z-index: 20;
+            background: rgba(0,20,30,0.8); padding: 10px;
+            border: 1px solid #005555;
+            box-shadow: 0 0 10px rgba(0,255,170,0.2);
+        }
+        h3 { margin: 0 0 5px 0; color: #ffaa00; text-shadow: 0 0 5px rgba(255,100,0,0.5);}
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="testCanvas"></canvas>
+    <div id="scanlines"></div>
+    <div id="debug-ui">
+        <h3>VISUAL TARGET TEST</h3>
+        <p>Estética: "Ancient Forge"</p>
+        <p>Capas Parallax: 5 + Foreground</p>
+        <p>Efectos: Partículas, Volumetría, Glow</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- NUEVA PALETA DE COLORES (Inspirada en la imagen) ---
+    const PALETTE = {
+        warmBright: '#ffdd55', // Luz intensa dorada
+        warmMid: '#ff6600',    // Naranja fuego
+        warmDark: '#aa2200',   // Rojo oscuro
+        coolLight: '#44aaaa',  // Cian verdoso luz
+        coolMid: '#005566',    // Verde azulado medio
+        coolDark: '#002233',   // Azul oscuro profundo
+        bgVeryDark: '#000811', // Casi negro azulado
+        shadow: 'rgba(0, 5, 10, 0.6)',
+        glowOrange: 'rgba(255, 100, 0, 0.5)',
+        glowTeal: 'rgba(0, 200, 200, 0.3)'
+    };
+
+    // --- SISTEMA DE PARTÍCULAS ---
+    let particles = [];
+    class Particle {
+        constructor(x, y, type) {
+            this.x = x; this.y = y;
+            this.type = type;
+            if (type === 'dust') {
+                this.vx = (Math.random() - 0.5) * 0.5; this.vy = (Math.random() - 0.5) * 0.5;
+                this.life = Math.random() * 200 + 100; this.maxLife = this.life;
+                this.size = Math.random() * 3 + 1; this.color = PALETTE.coolLight;
+            } else if (type === 'trail') {
+                 this.vx = (Math.random() - 0.5) * 2; this.vy = Math.random() * -1;
+                this.life = Math.random() * 20 + 10; this.maxLife = this.life;
+                this.size = Math.random() * 4 + 2; this.color = PALETTE.warmMid;
+            } else if (type === 'thruster') {
+                this.vx = (Math.random() - 0.5) * 1; this.vy = Math.random() * 2 + 1;
+                this.life = Math.random() * 30 + 20; this.maxLife = this.life;
+                this.size = Math.random() * 3 + 1; this.color = PALETTE.coolLight;
+            }
+        }
+        update() { this.x += this.vx; this.y += this.vy; this.life--; }
+        draw(ctx) {
+            ctx.save();
+            let alpha = this.life / this.maxLife;
+            ctx.globalAlpha = alpha;
+            ctx.fillStyle = this.color;
+            ctx.beginPath(); ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2); ctx.fill();
+            ctx.restore();
+        }
+    }
+
+    function updateAndDrawParticles(ctx) {
+        // Generar polvo ambiental
+        if (Math.random() > 0.8) particles.push(new Particle(Math.random()*GAME_WIDTH, Math.random()*GAME_HEIGHT, 'dust'));
+        
+        for (let i = particles.length - 1; i >= 0; i--) {
+            particles[i].update();
+            particles[i].draw(ctx);
+            if (particles[i].life <= 0) particles.splice(i, 1);
+        }
+    }
+
+    // --- HELPERS DE TEXTURA PROCEDIMENTAL ---
+    function applyGrungeTexture(ctx, x, y, w, h, density = 0.1, color = 'rgba(0,0,0,0.2)') {
+        ctx.save();
+        ctx.fillStyle = color;
+        for (let i = 0; i < w * h * density; i++) {
+            let nx = x + Math.random() * w;
+            let ny = y + Math.random() * h;
+            let s = Math.random() * 2 + 1;
+            ctx.fillRect(nx, ny, s, s);
+        }
+        ctx.restore();
+    }
+
+    // --- VARIABLES DE SIMULACIÓN ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+    
+    // --- CLASES REDISEÑADAS ---
+
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 24; this.height = 40; // Mantenemos tamaño
+            this.vx = 0; this.animTimer = 0;
+            this.facingRight = true; this.state = 'wait'; this.stateTimer = 0;
+        }
+        update() {
+            this.animTimer++; this.stateTimer++;
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3; this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+                 // Generar estela al moverse
+                if(gameTime % 3 === 0) particles.push(new Particle(this.x + this.width/2, this.y + this.height - 5, 'trail'));
+            } else if (this.state === 'walk_left') {
+                this.vx = -3; this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+                 // Generar estela al moverse
+                if(gameTime % 3 === 0) particles.push(new Particle(this.x + this.width/2, this.y + this.height - 5, 'trail'));
+            }
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+        }
+
+        draw(ctx) {
+            // --- REDISEÑO JUGADOR: Silueta de energía roja/naranja ---
+            ctx.save();
+            // Efecto de resplandor
+            ctx.shadowColor = PALETTE.warmMid; ctx.shadowBlur = 20;
+
+            let lean = 0; if (Math.abs(this.vx) > 1) lean = this.facingRight ? 3 : -3; 
+            ctx.translate(this.x + this.width/2, this.y + this.height); // Pivote en los pies
+            ctx.rotate(lean * 0.05);
+            ctx.translate(-this.width/2, -this.height);
+
+            // Cuerpo principal (Gradiente vertical fuego)
+            let bodyGrad = ctx.createLinearGradient(0, 0, 0, this.height);
+            bodyGrad.addColorStop(0, PALETTE.warmBright);
+            bodyGrad.addColorStop(0.6, PALETTE.warmMid);
+            bodyGrad.addColorStop(1, PALETTE.warmDark);
+            ctx.fillStyle = bodyGrad;
+
+            // Forma base (ligeramente redondeada pero manteniendo la caja general)
+            ctx.beginPath();
+            ctx.moveTo(0, this.height); ctx.lineTo(this.width, this.height); // Pies
+            ctx.lineTo(this.width - 2, this.height * 0.4); // Cintura der
+            ctx.lineTo(this.width + 2, 5); // Hombro der
+            ctx.lineTo(this.width/2 + 5, 0); // Cabeza top der
+            ctx.lineTo(this.width/2 - 5, 0); // Cabeza top izq
+            ctx.lineTo(-2, 5); // Hombro izq
+            ctx.lineTo(2, this.height * 0.4); // Cintura izq
+            ctx.closePath();
+            ctx.fill();
+
+            // Ojo/Visor Brillante
+            ctx.fillStyle = '#ffffff'; ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 10;
+            let eyeX = this.facingRight ? this.width * 0.6 : this.width * 0.2;
+            ctx.beginPath(); 
+            ctx.ellipse(eyeX, 10, 3, 2, 0, 0, Math.PI*2);
+            ctx.fill();
+            
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 30; // Mantenemos tamaño
+            this.vx = 2; this.dir = 1; this.timer = 0; this.state = 'walk'; this.startX = x;
+        }
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) { this.state = 'wait'; this.waitTimer = 60; }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) { this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk'; }
+            }
+        }
+        draw(ctx) {
+            // --- REDISEÑO WALKER: Bestia de piedra puntiaguda ---
+            ctx.save();
+            ctx.translate(this.x, this.y);
+            let anim = Math.sin(this.timer * 0.2);
+            let bounce = Math.abs(Math.sin(this.timer * 0.3)) * 3;
+            
+            // Cuerpo (Piedra oscura tallada)
+            let bodyGrad = ctx.createLinearGradient(0, 0, this.width, this.height);
+            bodyGrad.addColorStop(0, PALETTE.coolMid); bodyGrad.addColorStop(1, PALETTE.coolDark);
+            ctx.fillStyle = bodyGrad;
+            
+            ctx.beginPath();
+            ctx.moveTo(0, this.height - bounce);
+            ctx.lineTo(this.width/2, this.height - 5 - bounce); // Centro abajo
+            ctx.lineTo(this.width, this.height - bounce);
+            ctx.lineTo(this.width + 5, this.height/2 - bounce); // Punta derecha
+            ctx.lineTo(this.width - 5, 0 - bounce);
+            ctx.lineTo(this.width/2, 5 - bounce); // Centro arriba
+            ctx.lineTo(5, 0 - bounce);
+            ctx.lineTo(-5, this.height/2 - bounce); // Punta izquierda
+            ctx.closePath();
+            ctx.fill();
+            
+            // Ojos brillantes (Rojos agresivos)
+            ctx.fillStyle = PALETTE.warmMid; ctx.shadowColor = PALETTE.warmDark; ctx.shadowBlur = 15;
+            let eyeDir = this.dir > 0 ? 1 : -1;
+            ctx.fillRect(this.width/2 + (4*eyeDir), 10 - bounce, 6, 4);
+
+             // Púas dorsales (animadas)
+            ctx.shadowBlur = 0; ctx.fillStyle = PALETTE.coolDark;
+            ctx.save(); ctx.translate(this.width/2, -bounce); ctx.rotate(anim*0.2);
+            ctx.beginPath(); ctx.moveTo(-10, 0); ctx.lineTo(0, -15); ctx.lineTo(10,0); ctx.fill();
+            ctx.restore();
+            
+            ctx.restore();
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 20; // Mantenemos tamaño
+            this.startX = x; this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1;
+            // Partículas de motor
+            if(gameTime % 4 === 0) particles.push(new Particle(this.x + this.width/2, this.y + this.height, 'thruster'));
+        }
+        draw(ctx) {
+            // --- REDISEÑO FLYER: Reliquia flotante espinosa ---
+            ctx.save();
+            ctx.translate(this.x + this.width/2, this.y + this.height/2);
+            let float = Math.sin(this.timer * 0.05) * 3;
+            ctx.translate(0, float);
+
+            // Núcleo central pulsante
+            let pulse = Math.sin(this.timer * 0.1) * 0.2 + 1;
+            let coreGrad = ctx.createRadialGradient(0,0, 2, 0,0, 10 * pulse);
+            coreGrad.addColorStop(0, '#ffffff'); coreGrad.addColorStop(0.5, PALETTE.coolLight); coreGrad.addColorStop(1, PALETTE.coolMid);
+            ctx.fillStyle = coreGrad; ctx.shadowColor = PALETTE.coolLight; ctx.shadowBlur = 20 * pulse;
+            ctx.beginPath(); ctx.arc(0,0, 8, 0, Math.PI*2); ctx.fill();
+            ctx.shadowBlur = 0;
+
+            // Estructura metálica/rocosa exterior (púas girando lentamente)
+            ctx.fillStyle = PALETTE.coolDark;
+            ctx.rotate(this.timer * 0.02);
+            for(let i=0; i<4; i++) {
+                ctx.rotate(Math.PI/2);
+                ctx.beginPath(); ctx.moveTo(-5, -8); ctx.lineTo(0, -18); ctx.lineTo(5, -8); ctx.fill();
+            }
+            ctx.restore();
+        }
+    }
+
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450);
+    const flyer = new MockFlyer(600, 200);
+    const platforms = [ { x: 0, y: 540, width: 800, height: 200 }, { x: 750, y: 490, width: 400, height: 20 } ];
+
+    // --- NUEVO FONDO PARALLAX (5 Capas + Atmósfera) ---
+    // Definimos las capas con la nueva paleta de colores fríos/oscuros
+    const bgLayersConfig = [
+        { speed: 0.0, colorTop: PALETTE.coolDark, colorBot: PALETTE.bgVeryDark, type: 'sky' },
+        { speed: 0.05, colorBase: '#001522', heightMod: 550, jaggedness: 50, haze: 0.8, cached: null },
+        { speed: 0.15, colorBase: '#002233', heightMod: 450, jaggedness: 80, haze: 0.6, cached: null },
+        { speed: 0.30, colorBase: '#003344', heightMod: 300, jaggedness: 120, haze: 0.4, cached: null },
+        { speed: 0.50, colorBase: '#004455', heightMod: 150, jaggedness: 150, haze: 0.2, cached: null },
+    ];
+
+    // Función para dibujar las capas UNA SOLA VEZ en memoria
+    function initBackgroundCache() {
+        bgLayersConfig.forEach((layer, index) => {
+            if (layer.type === 'sky') return;
+
+            // Crear un canvas offscreen
+            const offCanvas = document.createElement('canvas');
+            // Lo hacemos un poco más ancho para cubrir el movimiento de cámara
+            const buffer = 400; 
+            offCanvas.width = GAME_WIDTH + buffer; 
+            offCanvas.height = GAME_HEIGHT;
+            const oCtx = offCanvas.getContext('2d');
+
+            // Dibujar Rocas
+            oCtx.beginPath();
+            oCtx.moveTo(0, GAME_HEIGHT);
+            
+            // Generamos la forma
+            for(let x = 0; x <= offCanvas.width; x += 50) {
+                // Ajustamos x para que coincida con el ruido original
+                let worldX = x - 200; 
+                let noise = Math.sin(worldX * 0.01 + index) * Math.cos(worldX * 0.034 + index*2) * layer.jaggedness;
+                let y = (GAME_HEIGHT - layer.heightMod) + noise;
+                oCtx.lineTo(x, y);
+            }
+            oCtx.lineTo(offCanvas.width, GAME_HEIGHT);
+            oCtx.closePath();
+
+            // Relleno
+            let rockGrad = oCtx.createLinearGradient(0, GAME_HEIGHT - layer.heightMod - layer.jaggedness, 0, GAME_HEIGHT);
+            rockGrad.addColorStop(0, layer.colorBase);
+            rockGrad.addColorStop(1, PALETTE.bgVeryDark);
+            oCtx.fillStyle = rockGrad;
+            oCtx.fill();
+
+            // Aplicar textura Grunge (AQUÍ ES SEGURO HACERLO PORQUE ES SOLO UNA VEZ)
+            oCtx.globalCompositeOperation = 'multiply';
+            applyGrungeTexture(oCtx, 0, GAME_HEIGHT - layer.heightMod, offCanvas.width, 400, 0.05, 'rgba(0,0,0,0.3)');
+            oCtx.globalCompositeOperation = 'source-over';
+
+            // Guardar en la configuración
+            layer.cached = offCanvas;
+        });
+    }
+    // Ejecutamos la precarga inmediatamente
+    initBackgroundCache();
+
+    function drawAtmosphere(ctx, density) {
+        // Neblina atmosférica superpuesta
+        let grad = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        grad.addColorStop(0, 'transparent');
+        grad.addColorStop(1, `rgba(0, 30, 50, ${density})`);
+        ctx.fillStyle = grad;
+        ctx.fillRect(0,0, GAME_WIDTH, GAME_HEIGHT);
+        
+        // Resplandor cálido central (la "forja" lejana)
+        let warmGlow = ctx.createRadialGradient(GAME_WIDTH/2, GAME_HEIGHT, 100, GAME_WIDTH/2, GAME_HEIGHT/2, GAME_WIDTH);
+        warmGlow.addColorStop(0, `rgba(255, 100, 0, ${density * 0.3})`);
+        warmGlow.addColorStop(1, 'transparent');
+        ctx.fillStyle = warmGlow;
+        ctx.fillRect(0,0, GAME_WIDTH, GAME_HEIGHT);
+    }
+
+    function drawBackground(ctx, cameraX, cameraY) {
+        ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); 
+        
+        // 1. Cielo Base
+        let skyGrad = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        skyGrad.addColorStop(0, bgLayersConfig[0].colorTop); 
+        skyGrad.addColorStop(1, bgLayersConfig[0].colorBot);
+        ctx.fillStyle = skyGrad; 
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // 2. Capas Rocosas Pre-renderizadas
+        for(let l=1; l < bgLayersConfig.length; l++) {
+            let layer = bgLayersConfig[l];
+            if (layer.cached) {
+                ctx.save();
+                // Calculamos posición parallax
+                // El offset -200 es para alinear con como se generó el canvas cacheado
+                let parallaxX = (-cameraX * layer.speed) - 200; 
+                let parallaxY = -cameraY * (layer.speed * 0.3); 
+                
+                ctx.drawImage(layer.cached, parallaxX, parallaxY);
+                ctx.restore();
+            }
+
+            // Dibujar atmósfera entre capas (esto es liviano, se puede dejar)
+            drawAtmosphere(ctx, layer.haze);
+        }
+        ctx.restore();
+    }
+
+    // --- NUEVA CAPA DE PRIMER PLANO (Foreground) ---
+    function drawForeground(ctx, cameraX) {
+        ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+        let speed = 1.2; // Se mueve más rápido que la cámara
+        let parallaxX = -cameraX * speed;
+        ctx.translate(parallaxX, 0);
+
+        ctx.fillStyle = '#000'; // Silueta negra pura
+        ctx.shadowColor = '#000'; ctx.shadowBlur = 50; // Muy desenfocado
+
+        // Elementos de primer plano grandes y oscuros en las esquinas inferiores
+        ctx.beginPath();
+        ctx.moveTo(-100, GAME_HEIGHT); ctx.lineTo(300, GAME_HEIGHT); ctx.lineTo(-100, GAME_HEIGHT - 300); ctx.fill();
+        
+        ctx.beginPath();
+        ctx.moveTo(GAME_WIDTH + 100, GAME_HEIGHT); ctx.lineTo(GAME_WIDTH - 400, GAME_HEIGHT); ctx.lineTo(GAME_WIDTH + 100, GAME_HEIGHT - 400); ctx.fill();
+
+        // Añadir algunos elementos repetitivos para el loop
+        ctx.beginPath();
+        ctx.moveTo(GAME_WIDTH/2, GAME_HEIGHT); ctx.lineTo(GAME_WIDTH/2 + 200, GAME_HEIGHT); ctx.lineTo(GAME_WIDTH/2 + 100, GAME_HEIGHT - 150); ctx.fill();
+
+        ctx.restore();
+        // Capa final de atmósfera intensa
+        drawAtmosphere(ctx, 0.1);
+    }
+
+    // --- REDISEÑO DEL MAPA (PLATAFORMAS) ---
+    function drawMap(ctx) {
+        platforms.forEach(p => {
+            ctx.save();
+            // Gradiente principal de la plataforma (Roca antigua)
+            // Luz cálida arriba, sombra fría abajo
+            let platGrad = ctx.createLinearGradient(p.x, p.y, p.x, p.y + p.height);
+            platGrad.addColorStop(0, PALETTE.warmMid);   // Borde iluminado
+            platGrad.addColorStop(0.1, PALETTE.coolMid); // Transición
+            platGrad.addColorStop(1, PALETTE.coolDark);  // Base oscura
+
+            ctx.fillStyle = platGrad;
+
+            // Dibujar forma base con un poco de irregularidad en los bordes
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            ctx.lineTo(p.x + p.width, p.y + (Math.random()*2));
+            ctx.lineTo(p.x + p.width - (Math.random()*5), p.y + p.height);
+            ctx.lineTo(p.x + (Math.random()*5), p.y + p.height);
+            ctx.closePath();
+            ctx.fill();
+
+            // Borde superior iluminado (Glow)
+            ctx.shadowColor = PALETTE.warmBright; ctx.shadowBlur = 15;
+            ctx.fillStyle = PALETTE.warmBright;
+            ctx.fillRect(p.x, p.y - 2, p.width, 4);
+            ctx.shadowBlur = 0;
+
+            // Textura de grietas y detalles (Overlay)
+            ctx.globalCompositeOperation = 'overlay';
+            ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.lineWidth = 2;
+            ctx.beginPath();
+            for(let i=0; i<p.width/30; i++) {
+                 let crackX = p.x + i*30 + Math.random()*10;
+                 ctx.moveTo(crackX, p.y);
+                 ctx.lineTo(crackX + (Math.random()-0.5)*20, p.y + p.height/2);
+                 ctx.lineTo(crackX + (Math.random()-0.5)*10, p.y + p.height);
+            }
+            ctx.stroke();
+
+            // Añadir textura de ruido grunge
+            // applyGrungeTexture(ctx, p.x, p.y, p.width, p.height, 0.2, 'rgba(0,20,30,0.3)');
+
+            ctx.restore();
+        });
+    }
+
+    // --- BUCLE PRINCIPAL ---
+    function loop() {
+        gameTime++;
+        camera.x = Math.sin(gameTime * 0.008) * 250; // Movimiento de cámara un poco más lento
+        
+        player.update(); walker.update(); flyer.update();
+
+        // --- RENDER ---
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 1. Fondo Parallax
+        drawBackground(ctx, camera.x, camera.y);
+
+        // 2. Capa de Juego (Afectada por cámara)
+        ctx.save();
+        // Crear un efecto de "calor" global sutil
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.fillStyle = 'rgba(255, 100, 0, 0.03)';
+        ctx.fillRect(0,0,GAME_WIDTH, GAME_HEIGHT);
+        ctx.globalCompositeOperation = 'source-over';
+
+        ctx.translate(-camera.x + 200, 0); 
+
+        updateAndDrawParticles(ctx); // Partículas detrás de objetos
+        drawMap(ctx);
+        
+        // Entidades (Usando el truco del testbed original para mantenerlas en pantalla)
+        ctx.save();
+        ctx.translate(camera.x - 200, 0); 
+        let screenOffsetX = camera.x;
+        ctx.translate(screenOffsetX, 0); 
+        ctx.restore();
+        
+        drawMap(ctx); // Redibujo necesario por el truco del testbed original
+        walker.draw(ctx);
+        flyer.draw(ctx);
+        player.draw(ctx); // Jugador al final para que esté encima
+        
+        ctx.restore();
+
+        // 3. Capa de Primer Plano (Foreground Parallax)
+        drawForeground(ctx, camera.x);
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>
