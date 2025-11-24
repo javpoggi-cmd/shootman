@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Alien Mothership Level</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #020205;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 60px rgba(0, 255, 200, 0.1);
+            border: 4px solid #222;
+            background: #000;
+            width: 1280px;
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            background-color: #050510;
+            /* Quitamos pixelated para que los efectos de luz se vean suaves, 
+               pero mantenemos la nitidez en el dibujo */
+            width: 100%;
+            height: 100%;
+        }
+        #scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), 
+                        linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+            background-size: 100% 4px, 3px 100%;
+            pointer-events: none;
+            z-index: 50;
+            opacity: 0.6;
+        }
+        #vignette {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, rgba(0,0,0,0) 60%, rgba(0,0,0,0.8) 100%);
+            pointer-events: none;
+            z-index: 40;
+        }
+        #debug-ui {
+            position: absolute; top: 20px; left: 20px; color: #00ffff; z-index: 60;
+            background: rgba(0, 20, 40, 0.8); padding: 15px;
+            border: 1px solid #00aaaa;
+            box-shadow: 0 0 10px #00ffff;
+            text-transform: uppercase;
+            font-size: 14px;
+        }
+        h3 { margin: 0 0 10px 0; letter-spacing: 2px; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="testCanvas"></canvas>
+    <div id="scanlines"></div>
+    <div id="vignette"></div>
+    <div id="debug-ui">
+        <h3>NIVEL 4: NAVE NODRIZA</h3>
+        <p>Bioma: XENO-TECH</p>
+        <p>Atmósfera: Baja Gravedad (Simulada)</p>
+        <p>Capas Render: 6 Fondo + 2 Frente</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- PALETA DE COLORES ALIENÍGENA ---
+    const ALIEN_COLORS = {
+        sky: '#020208',
+        neon: '#00ffcc',
+        neonDark: '#008866',
+        metalDark: '#151520',
+        metalLight: '#2a2a35',
+        hazard: '#ffaa00',
+        enemyGlow: '#ff0055'
+    };
+
+    // --- SISTEMA DE PARTÍCULAS ---
+    const particles = [];
+    class Particle {
+        constructor(x, y, type) {
+            this.x = x; this.y = y;
+            this.type = type; // 'dust', 'spark', 'mist'
+            this.life = 1.0;
+            
+            if (type === 'dust') {
+                this.vx = (Math.random() - 0.5) * 0.5;
+                this.vy = (Math.random() - 0.5) * 0.5;
+                this.size = Math.random() * 2;
+                this.decay = 0.005;
+            } else if (type === 'spark') {
+                this.vx = (Math.random() - 0.5) * 5;
+                this.vy = (Math.random() - 0.5) * 5;
+                this.size = Math.random() * 3;
+                this.decay = 0.05;
+            } else if (type === 'mist') {
+                this.vx = -1 - Math.random(); // Mueven izq constante
+                this.vy = 0;
+                this.size = 20 + Math.random() * 30;
+                this.decay = 0.01;
+                this.life = 0.6;
+            }
+        }
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            this.life -= this.decay;
+        }
+        draw(ctx) {
+            ctx.save();
+            ctx.globalAlpha = this.life;
+            if (this.type === 'dust') {
+                ctx.fillStyle = '#aaf';
+                ctx.fillRect(this.x, this.y, this.size, this.size);
+            } else if (this.type === 'spark') {
+                ctx.fillStyle = '#fff';
+                ctx.globalCompositeOperation = 'lighter';
+                ctx.beginPath(); ctx.arc(this.x, this.y, this.size, 0, Math.PI*2); ctx.fill();
+            } else if (this.type === 'mist') {
+                ctx.fillStyle = '#001122';
+                ctx.beginPath(); ctx.arc(this.x, this.y, this.size, 0, Math.PI*2); ctx.fill();
+            }
+            ctx.restore();
+        }
+    }
+
+    // --- VARIABLES DE SIMULACIÓN ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+
+    // --- ENTIDADES (MANTENIDAS DEL ORIGINAL, MEJORADO DRAW) ---
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 24; this.height = 40;
+            this.vx = 0; this.animTimer = 0; this.facingRight = true;
+            this.state = 'wait'; this.stateTimer = 0;
+        }
+        update() {
+            this.animTimer++; this.stateTimer++;
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3; this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3; this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+        }
+        draw(ctx) {
+            // Draw mejorado con iluminación
+            ctx.save(); 
+            
+            // Sombra suave debajo
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.beginPath(); ctx.ellipse(this.x + 12, this.y + 38, 10, 4, 0, 0, Math.PI*2); ctx.fill();
+
+            // Jugador
+            ctx.translate(this.facingRight ? 3 : -3, 0); // Lean visual
+            
+            // Traje Espacial (Blanco/Gris con reflejos azules)
+            ctx.fillStyle = '#ccc'; // Base suit
+            if (Math.abs(this.vx) > 0.5) { // Piernas animadas
+                let cycle = Math.sin(this.animTimer * 0.5);
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15 + cycle * 3); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15 - cycle * 3);
+            } else { 
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15); 
+            }
+
+            // Torso
+            let grad = ctx.createLinearGradient(this.x, this.y, this.x+24, this.y+40);
+            grad.addColorStop(0, '#eee'); grad.addColorStop(1, '#999');
+            ctx.fillStyle = grad;
+            ctx.fillRect(this.x, this.y + 10, this.width, 18);
+
+            // Jetpack brillante
+            ctx.shadowBlur = 10; ctx.shadowColor = ALIEN_COLORS.neon;
+            ctx.fillStyle = ALIEN_COLORS.neon; 
+            ctx.fillRect(this.facingRight ? this.x - 4 : this.x + 20, this.y + 12, 4, 10);
+            ctx.shadowBlur = 0;
+
+            // Casco
+            ctx.fillStyle = '#333'; ctx.fillRect(this.x + 2, this.y, 20, 12);
+            ctx.fillStyle = '#ffaa00'; ctx.fillRect(this.facingRight ? this.x + 12 : this.x + 2, this.y + 3, 10, 4);
+
+            // Arma Tech
+            ctx.fillStyle = '#888';
+            let gunX = this.facingRight ? this.x + 14 : this.x - 6; 
+            ctx.fillRect(gunX, this.y + 14, 16, 6);
+            // Luz arma
+            ctx.fillStyle = '#0f0'; ctx.fillRect(gunX + (this.facingRight?12:0), this.y + 14, 2, 2);
+
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 30; this.height = 30;
+            this.vx = 2; this.dir = 1; this.timer = 0; this.state = 'walk'; this.startX = x;
+        }
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) { this.state = 'wait'; this.waitTimer = 60; }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) { this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk'; }
+            }
+        }
+        draw(ctx) {
+            // Robot Alienígena
+            ctx.save();
+            
+            // Aura de amenaza
+            ctx.shadowBlur = 15; ctx.shadowColor = ALIEN_COLORS.enemyGlow;
+            
+            let anim = Math.sin(this.timer * 0.2);
+            let drawY = this.y - 10;
+
+            // Cuerpo metálico oscuro
+            ctx.fillStyle = '#400'; // Rojo oscuro base
+            ctx.fillRect(this.x, drawY, this.width, this.height);
+
+            // Textura metálica
+            ctx.fillStyle = 'rgba(255,255,255,0.1)';
+            ctx.fillRect(this.x, drawY, this.width/2, this.height);
+
+            // Ojo Cíclope Brillante
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x + 10, drawY + 5, 10, 10); 
+            ctx.fillStyle = '#f00'; ctx.fillRect(this.x + 13, drawY + 8, 4, 4);
+            
+            ctx.shadowBlur = 0; // Reset shadow para partes mecánicas
+
+            // Brazos sierras
+            ctx.fillStyle = '#888'; 
+            ctx.save(); ctx.translate(this.x + 5, drawY + 15); ctx.rotate(anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.save(); ctx.translate(this.x + 25, drawY + 15); ctx.rotate(-anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+
+            // Piernas hidráulicas
+            ctx.fillStyle = '#555';
+            ctx.fillRect(this.x + 5, drawY + 30, 5, 10 + anim * 5); 
+            ctx.fillRect(this.x + 20, drawY + 30, 5, 10 - anim * 5);
+            
+            ctx.restore();
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 30; this.height = 20;
+            this.startX = x; this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1;
+            
+            // Generar partículas de motor
+            if(Math.random() > 0.5) {
+                let p = new Particle(this.x + 15, this.y + 10, 'spark');
+                p.vx = 0; p.vy = 2; // Caen hacia abajo
+                p.life = 0.5;
+                particles.push(p);
+            }
+        }
+        draw(ctx) {
+            let flap = Math.sin(this.timer * 0.8) * 10;
+            ctx.save();
+            
+            // Cuerpo Drone
+            ctx.fillStyle = '#333';
+            ctx.beginPath();
+            ctx.moveTo(this.x, this.y);
+            ctx.lineTo(this.x + 30, this.y);
+            ctx.lineTo(this.x + 15, this.y + 20);
+            ctx.fill();
+
+            // Alas de energía
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.fillStyle = 'rgba(255, 50, 50, 0.6)';
+            ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(this.x - 10, this.y - 10 + flap); ctx.lineTo(this.x + 10, this.y); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(this.x + 30, this.y); ctx.lineTo(this.x + 40, this.y - 10 + flap); ctx.lineTo(this.x + 20, this.y); ctx.fill(); 
+            
+            // Ojo Drone
+            ctx.fillStyle = '#f00';
+            ctx.shadowBlur = 10; ctx.shadowColor = 'red';
+            ctx.fillRect(this.x + 10, this.y + 5, 10, 5);
+
+            ctx.restore();
+        }
+    }
+
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450);
+    const flyer = new MockFlyer(600, 200);
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200 },
+        { x: 750, y: 490, width: 400, height: 20 }
+    ];
+
+    // --- GENERACIÓN DE ESTRELLAS ESTÁTICAS ---
+    const stars = [];
+    for(let i=0; i<200; i++) {
+        stars.push({
+            x: Math.random() * GAME_WIDTH,
+            y: Math.random() * GAME_HEIGHT,
+            size: Math.random() * 1.5,
+            blink: Math.random()
+        });
+    }
+
+    // --- DIBUJADO DEL FONDO ALIENÍGENA (6 CAPAS) ---
+    function drawAlienBackground(ctx, camX, camY) {
+        // 0. Fondo Espacial Profundo
+        let bgGrad = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        bgGrad.addColorStop(0, '#000000');
+        bgGrad.addColorStop(1, '#050010');
+        ctx.fillStyle = bgGrad;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // 1. Estrellas (Parallax muy lento: 0.02)
+        ctx.save();
+        ctx.translate(-camX * 0.02, -camY * 0.02);
+        ctx.fillStyle = '#fff';
+        stars.forEach(star => {
+            ctx.globalAlpha = 0.5 + Math.sin(gameTime * 0.05 + star.blink * 10) * 0.5;
+            // Truco de wrap-around para estrellas infinitas
+            let sx = (star.x + camX * 0.02) % GAME_WIDTH;
+            if (sx < 0) sx += GAME_WIDTH;
+            ctx.fillRect(sx, star.y, star.size, star.size);
+        });
+        ctx.restore();
+
+        // 2. Nebulosas / Galaxias (Parallax: 0.05)
+        ctx.save();
+        ctx.translate(-camX * 0.05, -camY * 0.05);
+        let nebulaGrad = ctx.createRadialGradient(600, 300, 50, 600, 300, 600);
+        nebulaGrad.addColorStop(0, 'rgba(0, 255, 200, 0.05)');
+        nebulaGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = nebulaGrad;
+        ctx.fillRect(-500, -500, 3000, 2000);
+        ctx.restore();
+
+        // CONFIGURACIÓN DE ESTRUCTURAS
+        // Simular nave: parte superior e inferior densa, medio vacío (ventanales)
+        
+        // 3. Casco Exterior Lejano (Parallax: 0.15)
+        drawStructuralLayer(ctx, camX, camY, 0.15, '#0a0a12', 150, true);
+
+        // 4. Tuberías y Cables Medios (Parallax: 0.3)
+        drawStructuralLayer(ctx, camX, camY, 0.3, '#11111a', 100, false, true);
+
+        // 5. Columnas de Soporte (Parallax: 0.5)
+        drawPillars(ctx, camX, camY, 0.5, '#181822');
+
+        // 6. Marcos de Ventana Interior (Parallax: 0.8) - Lo más cercano antes del juego
+        drawWindowFrames(ctx, camX, camY, 0.8);
+    }
+
+    function drawStructuralLayer(ctx, cx, cy, speed, color, heightSize, isSolid, isCables) {
+        ctx.save();
+        let px = -cx * speed;
+        let py = -cy * (speed * 0.5);
+        ctx.translate(px, py);
+        
+        let patternW = 300;
+        let startI = Math.floor(-px / patternW) - 1;
+        let endI = startI + Math.ceil(GAME_WIDTH / patternW) + 2;
+
+        ctx.fillStyle = color;
+        
+        for (let i = startI; i < endI; i++) {
+            let x = i * patternW;
+            
+            if (isSolid) {
+                // Estructura superior e inferior masiva
+                ctx.fillRect(x, 0, patternW + 2, heightSize + Math.sin(i)*20); // Techo
+                ctx.fillRect(x, GAME_HEIGHT - heightSize + Math.sin(i)*20, patternW + 2, heightSize); // Suelo
+                
+                // Conectores diagonales
+                if (i % 2 === 0) {
+                    ctx.beginPath();
+                    ctx.moveTo(x, heightSize);
+                    ctx.lineTo(x + 50, heightSize + 50);
+                    ctx.lineTo(x + patternW, heightSize);
+                    ctx.fill();
+                }
+            }
+            
+            if (isCables) {
+                // Cables colgantes (Curvas Bezier)
+                ctx.strokeStyle = '#222233';
+                ctx.lineWidth = 4;
+                ctx.beginPath();
+                ctx.moveTo(x, 50);
+                ctx.bezierCurveTo(x + 100, 250, x + 200, 250, x + 300, 50);
+                ctx.stroke();
+                
+                // Luces pequeñas rojas intermitentes en los cables
+                if (i % 3 === 0 && Math.sin(gameTime * 0.1) > 0) {
+                    ctx.fillStyle = '#500';
+                    ctx.fillRect(x + 150, 180, 4, 4);
+                }
+            }
+        }
+        ctx.restore();
+    }
+
+    function drawPillars(ctx, cx, cy, speed, color) {
+        ctx.save();
+        let px = -cx * speed;
+        ctx.translate(px, 0); // No afectamos Y para que parezcan anclados al casco
+        
+        let gap = 600;
+        let startI = Math.floor(-px / gap) - 1;
+        let endI = startI + Math.ceil(GAME_WIDTH / gap) + 2;
+
+        for (let i = startI; i < endI; i++) {
+            let x = i * gap;
+            // Pilar grande vertical
+            let grad = ctx.createLinearGradient(x, 0, x+80, 0);
+            grad.addColorStop(0, color); grad.addColorStop(0.5, '#2a2a35'); grad.addColorStop(1, color);
+            ctx.fillStyle = grad;
+            ctx.fillRect(x, -100, 80, GAME_HEIGHT + 200);
+            
+            // Detalles tecnológicos
+            ctx.fillStyle = '#000';
+            for(let j=0; j<10; j++) {
+                ctx.fillRect(x + 10, j * 80 + 20, 60, 10);
+            }
+        }
+        ctx.restore();
+    }
+
+    function drawWindowFrames(ctx, cx, cy, speed) {
+        ctx.save();
+        let px = -cx * speed;
+        ctx.translate(px, -cy * 0.2); // Se mueve poco en Y
+        
+        let w = 1000; // Ventanales enormes
+        let startI = Math.floor(-px / w) - 1;
+        let endI = startI + Math.ceil(GAME_WIDTH / w) + 2;
+
+        ctx.fillStyle = '#000'; // Contraste fuerte
+        for (let i = startI; i < endI; i++) {
+            let x = i * w;
+            // Solo dibujamos el marco grueso arriba y abajo
+            ctx.fillRect(x, 0, w, 60); 
+            ctx.fillRect(x, GAME_HEIGHT - 60, w, 60);
+            
+            // Unión de los cristales
+            ctx.fillStyle = '#112233';
+            ctx.fillRect(x + w - 20, 0, 20, GAME_HEIGHT);
+            
+            // Brillo en el "cristal"
+            ctx.fillStyle = 'rgba(200, 255, 255, 0.02)';
+            ctx.beginPath(); ctx.moveTo(x, 60); ctx.lineTo(x+100, GAME_HEIGHT-60); ctx.lineTo(x, GAME_HEIGHT-60); ctx.fill();
+        }
+        ctx.restore();
+    }
+
+    // --- DIBUJADO PRIMER PLANO (2 CAPAS FRENTE AL JUEGO) ---
+    function drawForeground(ctx, cx, cy) {
+        // Capa 1 Frente: Tuberías borrosas arriba/abajo (Velocidad 1.2)
+        ctx.save();
+        let px = -cx * 1.2;
+        ctx.translate(px, 0);
+        
+        // Usar filtro blur si el navegador lo soporta (opcional, costoso, simulamos con transparencia)
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+        let gap = 900;
+        let startI = Math.floor(-px / gap) - 1;
+        let endI = startI + Math.ceil(GAME_WIDTH / gap) + 2;
+        
+        for (let i = startI; i < endI; i++) {
+            let x = i * gap;
+            // Tubería gigante que tapa la visión
+            if (i % 2 === 0) {
+                ctx.fillRect(x, -50, 150, 150); // Arriba
+                // Detalle
+                ctx.fillStyle = '#111'; ctx.fillRect(x+10, -40, 130, 130); ctx.fillStyle = 'rgba(0,0,0,0.8)';
+            } else {
+                ctx.fillRect(x + 200, GAME_HEIGHT - 100, 200, 200); // Abajo
+            }
+        }
+        ctx.restore();
+
+        // Capa 2 Frente: Partículas de polvo atmosférico / Neblina global
+        // Se dibujan en pantalla completa
+        particles.forEach(p => {
+            if(p.type === 'mist') p.draw(ctx);
+        });
+    }
+
+    // --- MAPA DETALLADO (PLATAFORMAS) ---
+    function drawDetailedMap(ctx) {
+        platforms.forEach(p => {
+            // 1. Cuerpo de la plataforma (Degradado Metálico)
+            let grad = ctx.createLinearGradient(p.x, p.y, p.x, p.y + p.height);
+            grad.addColorStop(0, ALIEN_COLORS.metalLight);
+            grad.addColorStop(1, ALIEN_COLORS.metalDark);
+            ctx.fillStyle = grad;
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+
+            // 2. Borde superior "Suelo"
+            ctx.fillStyle = '#3a3a45';
+            ctx.fillRect(p.x, p.y, p.width, 5);
+
+            // 3. Tira de Neón (Hazard strip)
+            let stripY = p.y + 15;
+            ctx.fillStyle = ALIEN_COLORS.neonDark;
+            ctx.fillRect(p.x, stripY, p.width, 4);
+            
+            // Patrón de advertencia
+            ctx.fillStyle = ALIEN_COLORS.neon;
+            // Efecto de "corriente" moviéndose en la tira
+            let offset = (gameTime * 2) % 40;
+            for(let i = 0; i < p.width; i+=40) {
+                let drawX = p.x + i + offset;
+                if (drawX < p.x + p.width - 10) {
+                    ctx.fillRect(drawX, stripY, 10, 4);
+                }
+            }
+
+            // 4. Textura de paneles
+            ctx.strokeStyle = '#111';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            for(let i = 50; i < p.width; i+=100) {
+                ctx.rect(p.x + i, p.y + 30, 80, p.height - 40);
+                // Remaches
+                ctx.fillStyle = '#000';
+                ctx.fillRect(p.x + i + 5, p.y + 35, 4, 4);
+                ctx.fillRect(p.x + i + 70, p.y + 35, 4, 4);
+            }
+            ctx.stroke();
+
+            // 5. Antenas y luces decorativas en los bordes
+            if (p.width > 200) {
+                // Antena izquierda
+                ctx.fillStyle = '#555'; ctx.fillRect(p.x + 10, p.y - 20, 5, 20);
+                ctx.fillStyle = 'red'; 
+                if (Math.floor(gameTime / 20) % 2 === 0) ctx.fillRect(p.x + 9, p.y - 22, 7, 7);
+            }
+        });
+    }
+
+    // --- BUCLE PRINCIPAL ---
+    function loop() {
+        gameTime++;
+        
+        // Cámara suave
+        camera.x = Math.sin(gameTime * 0.01) * 200;
+        
+        // Actualizar entidades
+        player.update();
+        walker.update();
+        flyer.update();
+
+        // Generar partículas ambientales
+        if (gameTime % 5 === 0) {
+            particles.push(new Particle(Math.random() * GAME_WIDTH, Math.random() * GAME_HEIGHT, 'dust'));
+        }
+        if (gameTime % 60 === 0) {
+            particles.push(new Particle(GAME_WIDTH + 50, Math.random() * GAME_HEIGHT, 'mist'));
+        }
+        // Limpiar partículas viejas
+        for (let i = particles.length - 1; i >= 0; i--) {
+            particles[i].update();
+            if (particles[i].life <= 0) particles.splice(i, 1);
+        }
+
+        // --- RENDER ---
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 1. Fondo (Parallax)
+        drawAlienBackground(ctx, camera.x, camera.y);
+        
+        // Preparar espacio de juego
+        ctx.save();
+        ctx.translate(-camera.x + 200, 0); 
+
+        // 2. Mapa y Decoración trasera
+        drawDetailedMap(ctx);
+
+        // Hack visual para mantener personajes en pantalla (igual que el original)
+        ctx.save();
+        ctx.translate(camera.x - 200, 0); 
+        let screenOffsetX = camera.x;
+        ctx.restore();
+        
+        // 3. Entidades
+        // Redibujamos mapa para que tape el fondo si es necesario, pero ya lo hicimos
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+        
+        // Partículas "en el mundo" (Dust)
+        particles.forEach(p => {
+            if (p.type !== 'mist') p.draw(ctx);
+        });
+
+        ctx.restore();
+
+        // 4. Primer Plano (Foreground Parallax)
+        drawForeground(ctx, camera.x, camera.y);
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>

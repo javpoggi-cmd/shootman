@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Nivel 2 - Neo Ciudad</title>
+    <style>
+        /* Mantenemos la estética de monitor CRT pero ajustamos colores */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #020205;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 60px rgba(0, 200, 255, 0.2); /* Glow azulado */
+            border: 4px solid #1a1a2e;
+            background: #000;
+            width: 1280px; 
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            background-color: #050010; /* Fondo base oscuro purpura */
+            image-rendering: pixelated;
+            width: 100%;
+            height: 100%;
+        }
+        #scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), 
+                        linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 4px, 6px 100%;
+            pointer-events: none;
+            z-index: 100;
+            opacity: 0.8;
+        }
+        #vignette {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, rgba(0,0,0,0) 50%, rgba(0,0,0,0.8) 100%);
+            z-index: 99;
+            pointer-events: none;
+        }
+        #debug-ui {
+            position: absolute; top: 10px; left: 10px; color: #00ffff; z-index: 101;
+            background: rgba(0,0,0,0.8); padding: 10px;
+            border: 1px solid #00ffff;
+            box-shadow: 0 0 10px #00ffff;
+            text-shadow: 0 0 5px #00ffff;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="testCanvas"></canvas>
+    <div id="scanlines"></div>
+    <div id="vignette"></div>
+    <div id="debug-ui">
+        <h3>TEST DE DISEÑO: NIVEL 2</h3>
+        <p>Bioma: NEO-CIUDAD (NOCTURNO)</p>
+        <p>Efectos: Lluvia, Neón, Smog</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- PALETA DE COLORES ACTUALIZADA (NEO-CIUDAD) ---
+    const COLORS = { 
+        player: '#e0e0e0', 
+        playerAccent: '#00ffff', // Cian neón
+        bullet: '#ff00ff',       // Magenta neón
+        enemyBullet: '#ffaa00', 
+        weapon: '#444' 
+    };
+    
+    // --- VARIABLES DE SIMULACIÓN ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+
+    // --- SISTEMA DE PARTÍCULAS (NUEVO) ---
+    class Particle {
+        constructor(x, y, type) {
+            this.x = x; this.y = y;
+            this.type = type;
+            this.life = 1.0;
+            this.vx = (Math.random() - 0.5) * 2;
+            this.vy = (Math.random() - 0.5) * 2;
+            
+            if (type === 'rain') {
+                this.vx = -4 - Math.random() * 2; // Viento fuerte
+                this.vy = 15 + Math.random() * 5; // Gravedad lluvia
+                this.life = Math.random() * 0.5 + 0.5;
+                this.width = 1;
+                this.height = 10 + Math.random() * 10;
+                this.color = `rgba(100, 200, 255, ${Math.random() * 0.3})`;
+            } else if (type === 'smoke') {
+                this.vx = (Math.random() - 0.2) * 1; 
+                this.vy = -1 - Math.random();
+                this.decay = 0.01;
+                this.size = 5 + Math.random() * 10;
+                this.color = `rgba(100, 100, 120, 0.3)`;
+            } else if (type === 'neon_spark') {
+                this.vx = (Math.random() - 0.5) * 5;
+                this.vy = (Math.random() - 0.5) * 5;
+                this.decay = 0.05;
+                this.color = Math.random() > 0.5 ? '#00ffff' : '#ff00ff';
+            }
+        }
+
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            
+            if (this.type === 'rain') {
+                if (this.y > GAME_HEIGHT) {
+                    this.y = -50;
+                    this.x = Math.random() * (GAME_WIDTH + 400); // Reset lluvia
+                }
+            } else {
+                this.life -= this.decay || 0.02;
+            }
+        }
+
+        draw(ctx) {
+            ctx.save();
+            if (this.type === 'rain') {
+                ctx.strokeStyle = this.color;
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+                ctx.moveTo(this.x, this.y);
+                ctx.lineTo(this.x + this.vx * 2, this.y + this.vy * 2); // Motion blur visual
+                ctx.stroke();
+            } else if (this.type === 'smoke') {
+                ctx.fillStyle = this.color;
+                ctx.globalAlpha = this.life * 0.4;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size * (2 - this.life), 0, Math.PI * 2);
+                ctx.fill();
+            } else if (this.type === 'neon_spark') {
+                ctx.fillStyle = this.color;
+                ctx.globalAlpha = this.life;
+                ctx.fillRect(this.x, this.y, 2, 2);
+            }
+            ctx.restore();
+        }
+    }
+
+    let particles = [];
+    // Inicializar lluvia
+    for(let i=0; i<300; i++) {
+        particles.push(new Particle(Math.random() * GAME_WIDTH, Math.random() * GAME_HEIGHT, 'rain'));
+    }
+
+    // --- CLASES ORIGINALES (LOGICA INTACTA, SOLO CAMBIOS COSMÉTICOS MENORES) ---
+
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 24; this.height = 40;
+            this.vx = 0; 
+            this.animTimer = 0;
+            this.facingRight = true;
+            this.state = 'wait'; 
+            this.stateTimer = 0;
+        }
+
+        update() {
+            this.animTimer++;
+            this.stateTimer++;
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { 
+                    this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left';
+                    this.stateTimer = 0;
+                }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3;
+                this.facingRight = true;
+                this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3;
+                this.facingRight = false;
+                this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+        }
+
+        draw(ctx) {
+            ctx.save(); 
+            // Sombra del jugador en el piso
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.beginPath(); ctx.ellipse(this.x + 12, this.y + 40, 10, 3, 0, 0, Math.PI*2); ctx.fill();
+
+            ctx.fillStyle = COLORS.player;
+            let lean = 0; if (Math.abs(this.vx) > 1) lean = this.facingRight ? 3 : -3; 
+            ctx.translate(lean, 0);
+            
+            if (Math.abs(this.vx) > 0.5) {
+                let cycle = Math.sin(this.animTimer * 0.5);
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15 + cycle * 3); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15 - cycle * 3);
+            } else { 
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15); 
+            }
+            
+            ctx.fillStyle = '#b0b0cc'; ctx.fillRect(this.x, this.y + 10, this.width, 18); // Traje más azulado
+            ctx.fillStyle = '#0055aa'; ctx.fillRect(this.facingRight ? this.x - 4 : this.x + 20, this.y + 12, 4, 10); 
+            ctx.fillStyle = '#222'; ctx.fillRect(this.x + 2, this.y, 20, 12); 
+            
+            // Visor Brillante
+            ctx.shadowBlur = 10; ctx.shadowColor = COLORS.playerAccent;
+            ctx.fillStyle = COLORS.playerAccent; ctx.fillRect(this.facingRight ? this.x + 12 : this.x + 2, this.y + 3, 10, 4);
+            ctx.shadowBlur = 0;
+
+            ctx.fillStyle = '#333';
+            let gunX = this.facingRight ? this.x + 14 : this.x - 6; 
+            let gunY = this.y + 14;
+            ctx.fillRect(gunX, gunY, 16, 6);
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 30;
+            this.vx = 2; this.dir = 1; this.timer = 0; this.state = 'walk'; this.startX = x;
+        }
+
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) {
+                    this.state = 'wait'; this.waitTimer = 60;
+                }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) {
+                    this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk';
+                }
+            }
+        }
+
+        draw(ctx) {
+            // Enemigo con colores más agresivos (Rojo Cyberpunk)
+            let enemyColor = '#aa2244';
+            ctx.fillStyle = enemyColor;
+            let anim = Math.sin(this.timer * 0.2);
+            let drawY = this.y - 10; 
+            
+            ctx.fillRect(this.x, drawY, this.width, this.height);
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x + 10, drawY + 5, 10, 10); 
+            
+            // Ojo brillante
+            ctx.shadowBlur = 5; ctx.shadowColor = 'red';
+            ctx.fillStyle = '#f00'; ctx.fillRect(this.x + 13, drawY + 8, 4, 4);
+            ctx.shadowBlur = 0;
+            
+            ctx.fillStyle = enemyColor; 
+            ctx.save(); ctx.translate(this.x + 5, drawY + 15); ctx.rotate(anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.save(); ctx.translate(this.x + 25, drawY + 15); ctx.rotate(-anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.fillRect(this.x + 5, drawY + 30, 5, 10 + anim * 5); 
+            ctx.fillRect(this.x + 20, drawY + 30, 5, 10 - anim * 5);
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 20; this.startX = x; this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1; 
+        }
+        draw(ctx) {
+            let flap = Math.sin(this.timer * 0.8) * 10;
+            ctx.fillStyle = '#555'; // Metal oscuro
+            ctx.fillRect(this.x, this.y, 30, 20); 
+            
+            ctx.fillStyle = '#334'; 
+            ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(this.x - 10, this.y - 10 + flap); ctx.lineTo(this.x + 10, this.y); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(this.x + 30, this.y); ctx.lineTo(this.x + 40, this.y - 10 + flap); ctx.lineTo(this.x + 20, this.y); ctx.fill(); 
+            
+            // Motor Neon
+            ctx.shadowBlur = 10; ctx.shadowColor = '#00ffaa';
+            ctx.fillStyle = '#00ffaa'; ctx.fillRect(this.x + 10, this.y + 5, 10, 5);
+            ctx.shadowBlur = 0;
+        }
+    }
+
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450); 
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200 },
+        { x: 750, y: 490, width: 400, height: 20 } 
+    ];
+
+    // --- RENDERIZADO DEL FONDO (6 CAPAS DE PARALLAX) ---
+    function drawCityBackground(ctx, cameraX, cameraY) {
+        
+        // --- Capa 0: Cielo Gradiente (Atardecer toxico/cyberpunk) ---
+        let grd = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        grd.addColorStop(0, '#050011'); // Purpura muy oscuro
+        grd.addColorStop(0.6, '#1a0b2e'); // Purpura medio
+        grd.addColorStop(1, '#2d1b4e'); // Brillo ciudad en el horizonte
+        
+        ctx.fillStyle = grd; 
+        ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.restore();
+
+        // Configuración de las 6 capas de fondo
+        const layers = [
+            // Capa 1: Siluetas de Mega-Estructuras (Muy lejos, estáticas casi)
+            { speed: 0.02, color: '#0a0514', heightMod: 600, width: 300, gap: 0, type: 'mega' },
+            // Capa 2: Edificios Lejanos
+            { speed: 0.1, color: '#110a1f', heightMod: 450, width: 150, gap: 20, type: 'tall' },
+            // Capa 3: Edificios Medios con ventanas simples
+            { speed: 0.25, color: '#1a102b', heightMod: 300, width: 120, gap: 50, type: 'mid' },
+            // Capa 4: Luces de trafico flotante / Niebla (Efecto especial)
+            { speed: 0.4, color: 'rgba(255, 0, 100, 0.1)', heightMod: 0, width: 0, gap: 0, type: 'traffic' },
+            // Capa 5: Edificios Cercanos (Detalle)
+            { speed: 0.6, color: '#251a3a', heightMod: 150, width: 180, gap: 100, type: 'close' },
+            // Capa 6: Estructuras inmediatas (Cables, postes de fondo)
+            { speed: 0.8, color: '#2e2244', heightMod: 0, width: 0, gap: 0, type: 'wires' }
+        ];
+
+        layers.forEach((layer, index) => {
+            ctx.save();
+            let parallaxX = -cameraX * layer.speed; 
+            let parallaxY = -cameraY * (layer.speed * 0.3); // Menos movimiento vertical
+            ctx.translate(parallaxX, parallaxY);
+            
+            if (layer.type === 'traffic') {
+                // Dibujar lineas de tráfico flotante (coches voladores borrosos)
+                let time = Date.now() * 0.001;
+                for(let t=0; t<5; t++) {
+                    let yPos = 200 + t * 50;
+                    let xOffset = (time * (50 + t * 20)) % 2000;
+                    
+                    let grad = ctx.createLinearGradient(xOffset, 0, xOffset + 200, 0);
+                    grad.addColorStop(0, 'rgba(0,0,0,0)');
+                    grad.addColorStop(0.5, t % 2 === 0 ? 'rgba(255,0,80,0.3)' : 'rgba(0,255,255,0.3)');
+                    grad.addColorStop(1, 'rgba(0,0,0,0)');
+                    
+                    ctx.fillStyle = grad;
+                    ctx.fillRect(xOffset - 1000, yPos, 400, 2 + t); // Linea larga
+                    ctx.fillRect(xOffset, yPos, 400, 2 + t); 
+                    ctx.fillRect(xOffset + 1000, yPos, 400, 2 + t);
+                }
+            } 
+            else if (layer.type === 'wires') {
+                // Dibujar cables que cruzan
+                ctx.strokeStyle = '#111';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                // Simulación de cables infinitos
+                let startX = Math.floor(-parallaxX / 500) * 500 - 500;
+                for(let w = startX; w < startX + GAME_WIDTH + 1000; w+=500) {
+                    ctx.moveTo(w, 100);
+                    ctx.bezierCurveTo(w+150, 300, w+350, 300, w+500, 100);
+                }
+                ctx.stroke();
+            }
+            else {
+                // Lógica de edificios procedurales
+                let totalW = layer.width + layer.gap;
+                let startI = Math.floor(-parallaxX / totalW) - 1;
+                let endI = startI + Math.ceil(GAME_WIDTH / totalW) + 2;
+
+                for (let i = startI; i < endI; i++) {
+                    let seed = i * 123.45 + index * 54.32; // Semilla pseudo-aleatoria
+                    let rndHeight = Math.abs(Math.sin(seed)) * 200;
+                    let h = layer.heightMod + rndHeight;
+                    let x = i * totalW;
+                    let y = GAME_HEIGHT - h;
+
+                    // Dibujar Edificio
+                    ctx.fillStyle = layer.color;
+                    ctx.fillRect(x, y, layer.width, h + 100); // +100 para cubrir abajo
+
+                    // --- DETALLES DE EDIFICIO SEGÚN CAPA ---
+                    
+                    // Luces de ventanas (Neon aleatorio)
+                    if (layer.type === 'close' || layer.type === 'mid') {
+                        let winCols = layer.type === 'close' ? 4 : 2;
+                        let winRows = 10;
+                        let winW = layer.width / (winCols * 2);
+                        let winH = 10;
+                        
+                        ctx.fillStyle = (Math.sin(seed) > 0.8) ? '#001133' : '#000'; // Color base ventana oscura
+                        
+                        for(let r=0; r<winRows; r++) {
+                            for(let c=0; c<winCols; c++) {
+                                // Ruido para decidir si la ventana está encendida
+                                let noise = Math.sin(seed + r * 13.1 + c * 7.7);
+                                if (noise > 0.6) {
+                                    if (noise > 0.9) ctx.fillStyle = '#cc00ff'; // Rosa Neón
+                                    else if (noise > 0.8) ctx.fillStyle = '#00ffff'; // Cian Neón
+                                    else ctx.fillStyle = '#ffffff'; // Blanca
+                                    
+                                    // Glow simple
+                                    ctx.globalAlpha = 0.6;
+                                    ctx.fillRect(x + 10 + c * winW * 2, y + 20 + r * 30, winW, winH);
+                                    ctx.globalAlpha = 1.0;
+                                }
+                            }
+                        }
+                    }
+
+                    // Antenas en la cima (Solo capa cercana)
+                    if (layer.type === 'close' && Math.sin(seed) > 0.5) {
+                        ctx.strokeStyle = '#333';
+                        ctx.lineWidth = 3;
+                        ctx.beginPath();
+                        ctx.moveTo(x + layer.width/2, y);
+                        ctx.lineTo(x + layer.width/2, y - 50);
+                        ctx.stroke();
+                        // Luz roja parpadeante en la punta
+                        if (Math.floor(Date.now() / 500) % 2 === 0) {
+                            ctx.fillStyle = 'red';
+                            ctx.beginPath(); ctx.arc(x + layer.width/2, y - 50, 3, 0, Math.PI*2); ctx.fill();
+                        }
+                    }
+                }
+            }
+            ctx.restore();
+        });
+    }
+
+    // --- RENDERIZADO DEL MAPA (PLATAFORMAS CON TEXTURAS DETALLADAS) ---
+    function drawDetailedMap(ctx) {
+        platforms.forEach(p => {
+            // 1. Cuerpo principal de la plataforma (Metal oscuro con textura)
+            let grdBody = ctx.createLinearGradient(p.x, p.y, p.x, p.y + p.height);
+            grdBody.addColorStop(0, '#1a1a20');
+            grdBody.addColorStop(1, '#0a0a0e');
+            ctx.fillStyle = grdBody;
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+
+            // 2. Textura de rejilla metálica
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(p.x, p.y, p.width, p.height);
+            ctx.clip();
+            ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+            ctx.lineWidth = 2;
+            for(let i=0; i<p.width; i+=20) {
+                ctx.beginPath(); ctx.moveTo(p.x + i, p.y); ctx.lineTo(p.x + i, p.y + p.height); ctx.stroke();
+            }
+            for(let i=0; i<p.height; i+=20) {
+                ctx.beginPath(); ctx.moveTo(p.x, p.y + i); ctx.lineTo(p.x + p.width, p.y + i); ctx.stroke();
+            }
+            ctx.restore();
+
+            // 3. Borde superior (Metal iluminado por la ciudad)
+            let grdTop = ctx.createLinearGradient(p.x, p.y, p.x, p.y + 10);
+            grdTop.addColorStop(0, '#556');
+            grdTop.addColorStop(0.5, '#889');
+            grdTop.addColorStop(1, '#334');
+            ctx.fillStyle = grdTop;
+            ctx.fillRect(p.x, p.y, p.width, 10);
+
+            // 4. Franja de precaución industrial (Amarillo/Negro desgastado) en el borde
+            ctx.fillStyle = '#cca300';
+            for(let i=0; i<p.width; i+=40) {
+                ctx.beginPath();
+                ctx.moveTo(p.x + i, p.y + 10);
+                ctx.lineTo(p.x + i + 20, p.y + 10);
+                ctx.lineTo(p.x + i + 10, p.y + 25);
+                ctx.lineTo(p.x + i - 10, p.y + 25);
+                ctx.fill();
+            }
+
+            // 5. Detalles adicionales: Tubos y Vents
+            if (p.height > 50) {
+                // Tubo lateral brillante
+                ctx.fillStyle = '#222';
+                ctx.fillRect(p.x - 5, p.y + 30, p.width + 10, 8);
+                // Neón bajo la plataforma (Underglow)
+                ctx.shadowBlur = 15;
+                ctx.shadowColor = '#00ffff';
+                ctx.fillStyle = '#00ffff';
+                ctx.fillRect(p.x + 20, p.y + 40, p.width - 40, 2);
+                ctx.shadowBlur = 0;
+            }
+
+            // Generador de humo en plataformas
+            if (Math.random() > 0.9) {
+                particles.push(new Particle(p.x + Math.random() * p.width, p.y + 10, 'smoke'));
+            }
+        });
+    }
+
+    // --- PRIMER PLANO (FOREGROUND) ---
+    function drawForeground(ctx, cameraX) {
+        // Capa 1: Estructuras borrosas muy cercanas (Postes, vallas)
+        ctx.save();
+        let parallaxX = -cameraX * 1.2; // Se mueve más rápido que el jugador
+        ctx.translate(parallaxX, 0);
+        
+        // Simular vallas que pasan rápido
+        let startX = Math.floor(-parallaxX / 1000) * 1000;
+        ctx.fillStyle = '#000';
+        ctx.globalAlpha = 0.8;
+        
+        for(let i = startX; i < startX + GAME_WIDTH + 1000; i+= 600) {
+            // Poste grueso
+            ctx.fillRect(i, 0, 80, GAME_HEIGHT); 
+            // Detalles neón en el poste (desenfocados)
+            ctx.filter = 'blur(4px)';
+            ctx.fillStyle = '#ff0055';
+            ctx.fillRect(i + 10, 200, 10, 300);
+            ctx.filter = 'none';
+            ctx.fillStyle = '#000';
+        }
+        ctx.restore();
+
+        // Capa 2: Lluvia y Partículas (Global, no afectada por parallax X, pero sí cámara Y)
+        particles.forEach((p, index) => {
+            p.update();
+            p.draw(ctx);
+            if (p.life <= 0 && p.type !== 'rain') particles.splice(index, 1);
+        });
+    }
+
+    // --- BUCLE PRINCIPAL ---
+    function loop() {
+        gameTime++;
+        
+        // Movimiento de cámara suave (mantenido del original)
+        camera.x = Math.sin(gameTime * 0.005) * 300; 
+        
+        // Actualizar entidades
+        player.update();
+        walker.update();
+        flyer.update();
+
+        // --- RENDER ---
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 1. Fondo (Neo Ciudad)
+        drawCityBackground(ctx, camera.x, camera.y);
+        
+        // Preparar coordenadas de juego
+        ctx.save();
+        ctx.translate(-camera.x + 200, 0); 
+
+        // 2. Mapa Detallado
+        drawDetailedMap(ctx);
+        
+        ctx.restore();
+
+        // 3. Entidades (Truco visual original mantenido: dibujamos estático + offset)
+        // NOTA: Para mejorar la integración con el nuevo fondo, aplicamos un tinte ligero a los pjs
+        let screenOffsetX = camera.x;
+        ctx.save();
+        ctx.translate(screenOffsetX, 0); 
+        ctx.restore();
+        
+        drawDetailedMap(ctx); // Redibujar mapa sobre fondo para recorte limpio
+        
+        // Dibujar personajes
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+        
+        // 4. Capas Frontales (Foreground + Clima)
+        drawForeground(ctx, camera.x);
+        
+        ctx.restore();
+
+        requestAnimationFrame(loop);
+    }
+
+    // Iniciar
+    loop();
+
+</script>
+</body>
+</html>

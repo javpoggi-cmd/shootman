@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Level 2 - Dark Industrial Construction</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #020202;
+            font-family: 'Courier New', Courier, monospace; /* Volvemos a la fuente original */
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 50px rgba(0, 255, 170, 0.05); /* Sombra sutil verdosa */
+            border: 4px solid #333; /* Borde original */
+            background: #000;
+            width: 1280px;
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            background-color: #050505;
+            width: 100%;
+            height: 100%;
+        }
+        /* Overlay de scanlines como en el original pero mejorado */
+        #scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), 
+                        linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 4px, 6px 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+        #atmosphere {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            /* Niebla verdosa muy sutil en la parte inferior */
+            background: linear-gradient(to top, rgba(42, 51, 46, 0.4) 0%, transparent 40%);
+            pointer-events: none;
+            z-index: 9;
+        }
+        #debug-ui {
+            position: absolute; top: 10px; left: 10px; 
+            color: #00ffaa; /* Color de texto original */
+            z-index: 20;
+            background: rgba(0,0,0,0.8); 
+            padding: 10px;
+            border-left: 2px solid #00ffaa;
+        }
+        h3 { margin: 0 0 5px 0; font-size: 16px; }
+        p { margin: 0; font-size: 12px; color: #88aa99; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    <div id="atmosphere"></div>
+    <div id="scanlines"></div>
+    <div id="debug-ui">
+        <h3>TEST DE DISEÑO V3</h3>
+        <p>Bioma: INDUSTRIAL (Original Palette)</p>
+        <p>Estado: En Construcción</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- PALETA DE COLORES (BASADA EN EL ORIGINAL) ---
+    // Usamos los colores exactos que me diste en el primer archivo, expandidos para capas
+    const ORIGINAL_PALETTE = {
+        sky: '#050505',
+        layers: ['#0a0a0a', '#111111', '#1a1a1a', '#222222'], // Capas originales
+        ground: '#2a332e', // Verde oscuro original
+        top: '#4a5e52',    // Verde grisáceo original
+        highlight: '#6b8c7a', // Una versión más clara del top para detalles
+        metal: '#333333',
+        scaffold: '#1a1a1a',
+        lights: '#ccffdd' // Luz fría, cian pálido
+    };
+
+    const COLORS = { 
+        player: '#e0e0e0', playerAccent: '#ffaa00', bullet: '#00ffaa', enemyBullet: '#ff4444', weapon: '#00ff00' 
+    };
+    const ENEMY_COLOR = '#cc4444';
+
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+    
+    // --- SISTEMA DE PARTÍCULAS ---
+    const particles = [];
+    class Particle {
+        constructor(x, y, type) {
+            this.x = x; this.y = y;
+            this.type = type; 
+            this.life = 1.0;
+            
+            if (type === 'dust') {
+                this.vx = (Math.random() - 0.5) * 0.5;
+                this.vy = (Math.random() - 0.5) * 0.5;
+                this.size = Math.random() * 2 + 1;
+                this.decay = 0.005;
+                // Polvo color verdoso/gris industrial
+                this.color = `rgba(100, 110, 105, ${Math.random() * 0.3})`;
+            } else if (type === 'spark') {
+                this.vx = (Math.random() - 0.5) * 5;
+                this.vy = -Math.random() * 4;
+                this.size = Math.random() * 2;
+                this.decay = 0.04;
+                this.color = '#ccffff'; // Chispas eléctricas (soldadura de arco) en vez de fuego
+                this.gravity = 0.25;
+            } else if (type === 'debris') {
+                this.vx = (Math.random() - 0.5) * 1;
+                this.vy = 1 + Math.random(); // Caen hacia abajo
+                this.size = 2 + Math.random() * 2;
+                this.decay = 0.01;
+                this.color = '#222';
+            }
+        }
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            this.life -= this.decay;
+            
+            if (this.type === 'spark') this.vy += this.gravity;
+        }
+        draw(ctx, camX, camY) {
+            ctx.fillStyle = this.type === 'dust' ? this.color : 
+                           this.type === 'spark' ? `rgba(200, 255, 255, ${this.life})` : 
+                           this.color;
+            
+            ctx.beginPath();
+            if (this.type === 'spark') ctx.rect(this.x - camX, this.y - camY, this.size, this.size);
+            else ctx.arc(this.x - camX, this.y - camY, this.size, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    // --- ENTIDADES ---
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 24; this.height = 40;
+            this.vx = 0; this.animTimer = 0; this.facingRight = true;
+            this.state = 'wait'; this.stateTimer = 0;
+        }
+        update() {
+            this.animTimer++; this.stateTimer++;
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3; this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3; this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+            
+            if (Math.abs(this.vx) > 0 && Math.random() > 0.8) {
+                particles.push(new Particle(this.x + 12, this.y + 40, 'dust'));
+            }
+        }
+        draw(ctx) {
+            ctx.save(); ctx.fillStyle = COLORS.player;
+            let lean = 0; if (Math.abs(this.vx) > 1) lean = this.facingRight ? 3 : -3; 
+            ctx.translate(lean, 0);
+            if (Math.abs(this.vx) > 0.5) {
+                let cycle = Math.sin(this.animTimer * 0.5);
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15 + cycle * 3); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15 - cycle * 3);
+            } else { ctx.fillRect(this.x + 4, this.y + 25, 6, 15); ctx.fillRect(this.x + 14, this.y + 25, 6, 15); }
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x, this.y + 10, this.width, 18);
+            ctx.fillStyle = '#55f'; ctx.fillRect(this.facingRight ? this.x - 4 : this.x + 20, this.y + 12, 4, 10);
+            ctx.fillStyle = '#333'; ctx.fillRect(this.x + 2, this.y, 20, 12);
+            ctx.fillStyle = COLORS.playerAccent; ctx.fillRect(this.facingRight ? this.x + 12 : this.x + 2, this.y + 3, 10, 4);
+            ctx.fillStyle = '#555';
+            let gunX = this.facingRight ? this.x + 14 : this.x - 6; let gunY = this.y + 14;
+            ctx.fillRect(gunX, gunY, 16, 6);
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 30; this.height = 30;
+            this.vx = 2; this.dir = 1; this.timer = 0; this.state = 'walk'; this.startX = x;
+        }
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) { this.state = 'wait'; this.waitTimer = 60; }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) { this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk'; }
+            }
+        }
+        draw(ctx) {
+            ctx.fillStyle = ENEMY_COLOR;
+            let anim = Math.sin(this.timer * 0.2); let drawY = this.y - 10; 
+            ctx.fillRect(this.x, drawY, this.width, this.height);
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x + 10, drawY + 5, 10, 10); 
+            ctx.fillStyle = '#f00'; ctx.fillRect(this.x + 13, drawY + 8, 4, 4);
+            ctx.fillStyle = ENEMY_COLOR; 
+            ctx.save(); ctx.translate(this.x + 5, drawY + 15); ctx.rotate(anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.save(); ctx.translate(this.x + 25, drawY + 15); ctx.rotate(-anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.fillRect(this.x + 5, drawY + 30, 5, 10 + anim * 5); 
+            ctx.fillRect(this.x + 20, drawY + 30, 5, 10 - anim * 5);
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 30; this.height = 20; this.startX = x; this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1; 
+        }
+        draw(ctx) {
+            let flap = Math.sin(this.timer * 0.8) * 10;
+            ctx.fillStyle = ENEMY_COLOR; ctx.fillRect(this.x, this.y, 30, 20); 
+            ctx.fillStyle = '#777'; 
+            ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(this.x - 10, this.y - 10 + flap); ctx.lineTo(this.x + 10, this.y); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(this.x + 30, this.y); ctx.lineTo(this.x + 40, this.y - 10 + flap); ctx.lineTo(this.x + 20, this.y); ctx.fill(); 
+            ctx.fillStyle = '#ff0'; ctx.fillRect(this.x + 10, this.y + 5, 10, 5);
+        }
+    }
+
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450);
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200 }, 
+        { x: 750, y: 490, width: 400, height: 20 }
+    ];
+
+    // --- GENERACIÓN DE TEXTURAS (Estilo Original) ---
+    // Textura de "Suelo" usando los colores originales pero con más detalle
+    function createDarkFloorPattern() {
+        const pCanvas = document.createElement('canvas');
+        pCanvas.width = 32; pCanvas.height = 32;
+        const pCtx = pCanvas.getContext('2d');
+        
+        // Fondo base (Verde oscuro original)
+        pCtx.fillStyle = ORIGINAL_PALETTE.ground; 
+        pCtx.fillRect(0,0,32,32);
+        
+        // Ruido industrial sutil
+        pCtx.fillStyle = 'rgba(0,0,0,0.2)';
+        pCtx.fillRect(0,0,16,16);
+        pCtx.fillRect(16,16,16,16);
+        
+        // Líneas de panel
+        pCtx.strokeStyle = '#222';
+        pCtx.lineWidth = 1;
+        pCtx.strokeRect(0,0,32,32);
+        
+        return ctx.createPattern(pCanvas, 'repeat');
+    }
+    const floorPattern = createDarkFloorPattern();
+
+    function createGirderPattern() {
+        const pCanvas = document.createElement('canvas');
+        pCanvas.width = 16; pCanvas.height = 16;
+        const pCtx = pCanvas.getContext('2d');
+        pCtx.strokeStyle = '#151515'; // Muy oscuro para el fondo
+        pCtx.lineWidth = 2;
+        pCtx.beginPath(); pCtx.moveTo(0,0); pCtx.lineTo(16,16); pCtx.stroke();
+        pCtx.beginPath(); pCtx.moveTo(16,0); pCtx.lineTo(0,16); pCtx.stroke();
+        return ctx.createPattern(pCanvas, 'repeat');
+    }
+    const girderPattern = createGirderPattern();
+
+    // --- CAPAS DE FONDO (Colores Originales + Profundidad) ---
+    // Mapeamos los colores de layers originales a las capas de parallax
+    const bgLayers = [
+        // Capa 0: Fondo muy lejano (Sky + Layer 0)
+        { speed: 0.02, color: '#080808', yOff: 100, type: 'skyline_far' }, 
+        
+        // Capa 1: Layer 1 original (#0a0a0a)
+        { speed: 0.05, color: ORIGINAL_PALETTE.layers[0], yOff: 50, type: 'buildings_fog' }, 
+        
+        // Capa 2: Grúas oscuras (Siluetas)
+        { speed: 0.1, color: ORIGINAL_PALETTE.layers[1], yOff: 0, type: 'cranes' },          
+        
+        // Capa 3: Layer 2 original (#1a1a1a) - Estructuras en construcción
+        { speed: 0.2, color: ORIGINAL_PALETTE.layers[2], yOff: -50, type: 'construction' },  
+        
+        // Capa 4: Layer 3 original (#222222) - Detalles
+        { speed: 0.4, color: ORIGINAL_PALETTE.layers[3], yOff: -20, type: 'details' },       
+        
+        // Capa 5: Cercano (Un poco más claro que layer 3 para contraste)
+        { speed: 0.6, color: '#252525', yOff: 0, type: 'close' }            
+    ];
+    
+    const fgLayers = [
+        { speed: 1.2, color: '#000', yOff: 0, type: 'pillars' },            
+        { speed: 1.5, color: '#000', yOff: 0, type: 'wires' }               
+    ];
+
+    function drawLayer(ctx, layer, camX, camY) {
+        let parallaxX = -camX * layer.speed;
+        let parallaxY = -camY * (layer.speed * 0.3);
+        
+        ctx.save();
+        ctx.translate(parallaxX, parallaxY);
+
+        let spacing = (layer.type === 'skyline_far') ? 100 : 
+                      (layer.type === 'construction') ? 250 : 200;
+        if (layer.type === 'cranes') spacing = 450;
+        if (layer.type === 'wires') spacing = 800;
+
+        let startI = Math.floor(-parallaxX / spacing) - 1;
+        let endI = startI + Math.ceil(GAME_WIDTH / spacing) + 2;
+
+        for (let i = startI; i < endI; i++) {
+            let x = i * spacing;
+            let seed = Math.sin(i * 123.45 + layer.speed * 50);
+            let height = 200 + Math.abs(seed) * 300;
+            let y = GAME_HEIGHT - height + layer.yOff;
+            
+            if (layer.type === 'skyline_far') {
+                ctx.fillStyle = layer.color;
+                ctx.fillRect(x, y, spacing + 1, height + 500);
+                // Luces de baliza rojas tenues (comunes en edificios altos)
+                if (seed > 0.85) {
+                    ctx.fillStyle = 'rgba(255, 0, 0, 0.4)';
+                    ctx.fillRect(x + spacing/2, y, 3, 3);
+                }
+            }
+            else if (layer.type === 'buildings_fog') {
+                ctx.fillStyle = layer.color;
+                ctx.fillRect(x + 10, y, spacing - 20, height + 500);
+            }
+            else if (layer.type === 'cranes') {
+                if (seed > 0.2) { 
+                    // Grúa
+                    ctx.strokeStyle = '#111'; // Casi negro
+                    ctx.lineWidth = 3;
+                    ctx.beginPath();
+                    ctx.moveTo(x + 50, GAME_HEIGHT);
+                    ctx.lineTo(x + 50, GAME_HEIGHT - 400); 
+                    ctx.lineTo(x + 250, GAME_HEIGHT - 450); 
+                    ctx.stroke();
+                    ctx.fillStyle = '#111';
+                    ctx.fillRect(x + 20, GAME_HEIGHT - 400, 30, 20);
+                }
+            }
+            else if (layer.type === 'construction') {
+                ctx.fillStyle = layer.color;
+                // Vigas estilo original (monocromáticas)
+                ctx.fillRect(x, y, 15, height + 500);
+                ctx.fillRect(x + spacing - 15, y, 15, height + 500);
+                for (let fy = y; fy < GAME_HEIGHT; fy += 50) {
+                    ctx.fillRect(x, fy, spacing, 8);
+                }
+                // Relleno interior con patrón de vigas oscuras
+                ctx.fillStyle = girderPattern;
+                ctx.fillRect(x + 15, y, spacing - 30, height + 500);
+                
+                // Soldador (Efecto de luz parpadeante)
+                if (Math.random() > 0.98 && seed > 0) {
+                    particles.push(new Particle(x + 40, y + 50 + Math.random()*100, 'spark'));
+                }
+            }
+            else if (layer.type === 'close') {
+                ctx.fillStyle = layer.color;
+                let bWidth = spacing - 10;
+                ctx.fillRect(x, y, bWidth, height + 500);
+                
+                // Ventanas (Estilo Original: Clusters)
+                // "quiero que los edificios mas terminados tengan algunas ventanas apagadas"
+                const windowsOn = seed > 0.4; 
+                if (windowsOn) {
+                    for (let wy = y + 20; wy < GAME_HEIGHT; wy += 30) {
+                        for (let wx = x + 20; wx < x + bWidth - 20; wx += 20) {
+                            let wSeed = Math.sin(wx * wy);
+                            // Usamos colores muy oscuros o el cian pálido
+                            if (wSeed > 0.8) {
+                                ctx.fillStyle = (wSeed > 0.95) ? ORIGINAL_PALETTE.lights : '#2a403d'; 
+                                ctx.fillRect(wx, wy, 8, 14);
+                            }
+                        }
+                    }
+                }
+                
+                // Andamios externos (líneas finas)
+                if (seed < -0.3) {
+                    ctx.fillStyle = '#333';
+                    for (let sy = y; sy < GAME_HEIGHT; sy+=40) {
+                        ctx.fillRect(x - 5, sy, bWidth + 10, 2);
+                    }
+                }
+            }
+            else if (layer.type === 'pillars') {
+                if (seed > 0.6) {
+                    ctx.fillStyle = 'rgba(0,0,0,0.9)';
+                    ctx.fillRect(x, 0, 60, GAME_HEIGHT);
+                }
+            }
+            else if (layer.type === 'wires') {
+                ctx.beginPath();
+                ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+                ctx.lineWidth = 4;
+                ctx.moveTo(x - 200, 0);
+                ctx.bezierCurveTo(x, 200, x + 400, 200, x + spacing + 200, 0);
+                ctx.stroke();
+            }
+        }
+        ctx.restore();
+    }
+
+    function drawMap(ctx) {
+        platforms.forEach((p, idx) => {
+            // Sombra
+            ctx.fillStyle = 'rgba(0,0,0,0.6)';
+            ctx.fillRect(p.x + 8, p.y + 8, p.width, p.height);
+
+            // Cuerpo principal (Color Ground Original con patrón)
+            ctx.fillStyle = floorPattern; 
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+            
+            // Borde superior (Color Top Original)
+            ctx.fillStyle = ORIGINAL_PALETTE.top;
+            ctx.fillRect(p.x, p.y, p.width, 12);
+            
+            // Highlight borde
+            ctx.fillStyle = ORIGINAL_PALETTE.highlight;
+            ctx.fillRect(p.x, p.y, p.width, 2);
+
+            // Franjas de precaución pero "apagadas" (más oscuras)
+            const stripeW = 20;
+            ctx.fillStyle = '#3a3a3a'; // Gris oscuro en lugar de amarillo brillante
+            ctx.fillRect(p.x, p.y + 12, p.width, 10); 
+            
+            ctx.fillStyle = '#111';
+            for (let i = 0; i < p.width; i+=30) {
+                ctx.beginPath();
+                ctx.moveTo(p.x + i, p.y + 12);
+                ctx.lineTo(p.x + i + 15, p.y + 12);
+                ctx.lineTo(p.x + i, p.y + 22);
+                ctx.lineTo(p.x + i - 15, p.y + 22);
+                ctx.fill();
+            }
+
+            // Decoración estilo original (cuadraditos oscuros en la base)
+            ctx.fillStyle = '#151b18';
+            if (idx === 0) { // Suelo
+                for(let k=0; k<p.width; k+=100) {
+                    ctx.fillRect(p.x + k + 20, p.y + 40, 20, 20);
+                    ctx.fillRect(p.x + k + 50, p.y + 40, 20, 20);
+                }
+            }
+        });
+    }
+
+    function loop() {
+        gameTime++;
+        camera.x += 1.5; 
+        
+        player.update();
+        walker.update();
+        flyer.update();
+        
+        // Partículas ambientales (menos frecuentes que en v2)
+        if (Math.random() > 0.85) {
+            particles.push(new Particle(camera.x + Math.random()*GAME_WIDTH, Math.random()*GAME_HEIGHT, 'dust'));
+        }
+        
+        // Render
+        ctx.fillStyle = ORIGINAL_PALETTE.sky;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Gradiente muy sutil del fondo original
+        let grad = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        grad.addColorStop(0, '#050505');
+        grad.addColorStop(1, '#111'); // Un poco más claro abajo
+        ctx.fillStyle = grad;
+        ctx.fillRect(0,0, GAME_WIDTH, GAME_HEIGHT);
+
+        bgLayers.forEach(layer => drawLayer(ctx, layer, camera.x, camera.y));
+        
+        let renderOffsetX = -camera.x % 2400; 
+        
+        ctx.save();
+        ctx.translate(200, 0); 
+        
+        // Loop Map
+        ctx.save();
+        ctx.translate(renderOffsetX, 0);
+        drawMap(ctx); 
+        ctx.translate(2400, 0);
+        drawMap(ctx);
+        ctx.restore();
+
+        // Entidades
+        player.draw(ctx);
+        
+        ctx.save();
+        ctx.translate(renderOffsetX, 0); 
+        walker.draw(ctx); 
+        flyer.draw(ctx);
+        ctx.translate(1200, 0);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+        ctx.restore();
+
+        particles.forEach((p, index) => {
+            p.update();
+            p.draw(ctx, 0, 0); 
+            if (p.life <= 0) particles.splice(index, 1);
+        });
+
+        ctx.restore();
+
+        fgLayers.forEach(layer => drawLayer(ctx, layer, camera.x, camera.y));
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>

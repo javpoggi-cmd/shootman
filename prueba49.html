@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Deep Industrial Level</title>
+    <style>
+        /* MISMOS ESTILOS DEL JUEGO ORIGINAL */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050505;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.8);
+            border: 4px solid #333;
+            background: #000;
+            width: 1280px;
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            background-color: #0f1210;
+            image-rendering: pixelated;
+            width: 100%;
+            height: 100%;
+        }
+        #scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), 
+                        linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 4px, 6px 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+        /* Añadimos una viñeta sutil para centrar la atención */
+        #overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, transparent 60%, rgba(0,0,0,0.6) 100%);
+            pointer-events: none;
+            z-index: 11;
+        }
+        #debug-ui {
+            position: absolute; top: 10px; left: 10px; color: #00ffaa; z-index: 20;
+            background: rgba(0,0,0,0.7); padding: 10px; border-left: 2px solid #00ffaa;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="testCanvas"></canvas>
+    <div id="scanlines"></div>
+    <div id="overlay"></div>
+    <div id="debug-ui">
+        <h3>TEST DE DISEÑO - FASE 2</h3>
+        <p>Bioma: DEEP CITY</p>
+        <p>Capas: 6 Fondo / 2 Frente</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- COLORES ORIGINALES (MANTENIDOS) ---
+    // Mantenemos la identidad visual exacta de los personajes
+    const COLORS = { 
+        player: '#e0e0e0', 
+        playerAccent: '#ffaa00', 
+        bullet: '#00ffaa', 
+        enemyBullet: '#ff4444', 
+        weapon: '#00ff00' 
+    };
+    
+    // --- NUEVA PALETA DE ENTORNO (EVOLUCIÓN NATURAL) ---
+    // Es la misma paleta "Industrial" pero con más matices para el detalle
+    const BIOME = { 
+        sky: '#050505', 
+        // 6 Capas de gris oscuro a gris medio-verdoso
+        layers: ['#080808', '#0d0d0d', '#141414', '#1a1a1a', '#222222', '#282828'], 
+        groundBase: '#2a332e', // El color original de suelo
+        groundDark: '#1e2420',
+        groundLight: '#3a453f',
+        topHighlight: '#4a5e52' // El borde original
+    };
+    
+    const ENEMY_COLOR = '#cc4444';
+
+    // --- VARIABLES ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+    
+    // --- ENTIDADES (MANTENIDAS EXACTAMENTE IGUAL) ---
+    // No cambiamos lógica, solo dibujado si es necesario, pero el usuario pidió no cambiar al PJ.
+
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 24; this.height = 40;
+            this.vx = 0; this.animTimer = 0;
+            this.facingRight = true;
+            this.state = 'wait'; this.stateTimer = 0;
+        }
+        update() {
+            this.animTimer++; this.stateTimer++;
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3; this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3; this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+        }
+        draw(ctx) {
+            // Dibujo original intacto
+            ctx.save(); ctx.fillStyle = COLORS.player;
+            let lean = 0; if (Math.abs(this.vx) > 1) lean = this.facingRight ? 3 : -3; 
+            ctx.translate(lean, 0);
+            if (Math.abs(this.vx) > 0.5) {
+                let cycle = Math.sin(this.animTimer * 0.5);
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15 + cycle * 3); ctx.fillRect(this.x + 14, this.y + 25, 6, 15 - cycle * 3);
+            } else { ctx.fillRect(this.x + 4, this.y + 25, 6, 15); ctx.fillRect(this.x + 14, this.y + 25, 6, 15); }
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x, this.y + 10, this.width, 18);
+            ctx.fillStyle = '#55f'; ctx.fillRect(this.facingRight ? this.x - 4 : this.x + 20, this.y + 12, 4, 10);
+            ctx.fillStyle = '#333'; ctx.fillRect(this.x + 2, this.y, 20, 12);
+            ctx.fillStyle = COLORS.playerAccent; ctx.fillRect(this.facingRight ? this.x + 12 : this.x + 2, this.y + 3, 10, 4);
+            ctx.fillStyle = '#555'; let gunX = this.facingRight ? this.x + 14 : this.x - 6; let gunY = this.y + 14;
+            ctx.fillRect(gunX, gunY, 16, 6);
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 30; this.height = 30;
+            this.vx = 2; this.dir = 1; this.timer = 0; this.state = 'walk'; this.startX = x;
+        }
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) { this.state = 'wait'; this.waitTimer = 60; }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) { this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk'; }
+            }
+        }
+        draw(ctx) {
+            ctx.fillStyle = ENEMY_COLOR;
+            let anim = Math.sin(this.timer * 0.2); let drawY = this.y - 10; 
+            ctx.fillRect(this.x, drawY, this.width, this.height);
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x + 10, drawY + 5, 10, 10); 
+            ctx.fillStyle = '#f00'; ctx.fillRect(this.x + 13, drawY + 8, 4, 4);
+            ctx.fillStyle = ENEMY_COLOR; 
+            ctx.save(); ctx.translate(this.x + 5, drawY + 15); ctx.rotate(anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.save(); ctx.translate(this.x + 25, drawY + 15); ctx.rotate(-anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.fillRect(this.x + 5, drawY + 30, 5, 10 + anim * 5); ctx.fillRect(this.x + 20, drawY + 30, 5, 10 - anim * 5);
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 30; this.height = 20; this.startX = x; this.timer = 0;
+        }
+        update() {
+            this.timer++; this.x = this.startX + Math.sin(this.timer * 0.02) * 200; this.y += Math.cos(this.timer * 0.05) * 1; 
+        }
+        draw(ctx) {
+            let flap = Math.sin(this.timer * 0.8) * 10;
+            ctx.fillStyle = ENEMY_COLOR; ctx.fillRect(this.x, this.y, 30, 20); 
+            ctx.fillStyle = '#777'; 
+            ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(this.x - 10, this.y - 10 + flap); ctx.lineTo(this.x + 10, this.y); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(this.x + 30, this.y); ctx.lineTo(this.x + 40, this.y - 10 + flap); ctx.lineTo(this.x + 20, this.y); ctx.fill(); 
+            ctx.fillStyle = '#ff0'; ctx.fillRect(this.x + 10, this.y + 5, 10, 5);
+        }
+    }
+
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450); 
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200 }, 
+        { x: 750, y: 490, width: 400, height: 20 }
+    ];
+
+    // --- NUEVO SISTEMA DE DIBUJADO DE FONDO (6 CAPAS) ---
+    // Conservamos el estilo "bloque" pero aumentamos la densidad y detalle para que parezca una ciudad más grande.
+    const layersConfig = [
+        { speed: 0.02, color: BIOME.layers[0], h: 600, w: 80, gap: 10, detail: false },
+        { speed: 0.05, color: BIOME.layers[1], h: 500, w: 100, gap: 10, detail: false },
+        { speed: 0.10, color: BIOME.layers[2], h: 400, w: 120, gap: 15, detail: true }, // Ventanas lejanas
+        { speed: 0.20, color: BIOME.layers[3], h: 300, w: 150, gap: 20, detail: true }, // Ventanas medias
+        { speed: 0.40, color: BIOME.layers[4], h: 200, w: 200, gap: 30, detail: true }, // Estructuras cercanas
+        { speed: 0.60, color: BIOME.layers[5], h: 100, w: 300, gap: 50, detail: 'pipes' } // Primer plano fondo
+    ];
+
+    function drawBackground(ctx, cameraX, cameraY) {
+        ctx.fillStyle = BIOME.sky; 
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Estrellas / Polvo estático muy tenue
+        ctx.fillStyle = 'rgba(255,255,255,0.1)';
+        for(let s=0; s<50; s++) {
+            let sx = (s * 12345) % canvas.width;
+            let sy = (s * 67890) % 400;
+            ctx.fillRect(sx, sy, 1, 1);
+        }
+
+        layersConfig.forEach((layer, index) => {
+            ctx.save();
+            let parallaxX = -cameraX * layer.speed;
+            let parallaxY = -cameraY * (layer.speed * 0.5);
+            ctx.translate(parallaxX, parallaxY);
+            
+            let totalW = layer.w + layer.gap;
+            let startI = Math.floor(-parallaxX / totalW) - 1; 
+            let endI = startI + Math.ceil(GAME_WIDTH / totalW) + 2;
+            
+            for (let i = startI; i < endI; i++) {
+                // Generación pseudo-aleatoria consistente basada en índice
+                let seed = Math.sin(i * 12.9898 + index * 78.233);
+                let x = i * totalW;
+                let h = layer.h + (seed * 100); 
+                let y = GAME_HEIGHT - h;
+                
+                // Dibujo base del edificio
+                ctx.fillStyle = layer.color;
+                ctx.fillRect(x, y, layer.w, h + 1000);
+                
+                // DETALLES (Ventanas y luces)
+                // Usamos la lógica original pero refinada para más densidad
+                if (layer.detail === true && Math.abs(seed) > 0.2) {
+                    let rows = Math.floor(h / 30);
+                    let cols = Math.floor(layer.w / 15);
+                    
+                    ctx.fillStyle = (index % 2 === 0) ? '#112211' : '#001100'; // Ventanas apagadas (detalle oscuro)
+                    for(let r=0; r<rows; r++) {
+                        for(let c=1; c<cols-1; c++) {
+                            // Patrón de luces
+                            let lightSeed = Math.sin(i*r*c);
+                            if (lightSeed > 0.96) ctx.fillStyle = '#ccffcc'; // Luz encendida (verde pálido)
+                            else if (lightSeed > 0.92) ctx.fillStyle = '#557755'; // Luz tenue
+                            else ctx.fillStyle = 'rgba(0,0,0,0.3)'; // Ventana oscura
+                            
+                            if (r % 2 !== 0 && c % 2 !== 0) { // Patrón de rejilla
+                                ctx.fillRect(x + c * 15, y + 20 + r * 30, 6, 12);
+                            }
+                        }
+                    }
+                    
+                    // Antenas en el techo (detalle simple)
+                    if (seed > 0.7) {
+                         ctx.fillStyle = layer.color;
+                         ctx.fillRect(x + layer.w/2, y - 20, 4, 20);
+                         ctx.fillStyle = '#aa0000'; // Luz de baliza roja pequeña
+                         if (Math.floor(gameTime / 30) % 2 === 0) ctx.fillRect(x + layer.w/2, y - 22, 4, 4);
+                    }
+                } else if (layer.detail === 'pipes') {
+                    // Capa más cercana: Tuberías y muros
+                    // Borde superior
+                    ctx.fillStyle = '#151515';
+                    ctx.fillRect(x, y, layer.w, 10);
+                    // Detalles verticales
+                    ctx.fillStyle = '#111';
+                    ctx.fillRect(x + 10, y + 10, 10, h);
+                    ctx.fillRect(x + layer.w - 20, y + 10, 10, h);
+                }
+            }
+            ctx.restore();
+        });
+    }
+
+    // --- NUEVO SISTEMA DE MAPA (Texturizado pero misma forma) ---
+    function drawMap(ctx) {
+        platforms.forEach(p => {
+            // 1. Base principal (Mismo color base pero con textura de ruido)
+            ctx.fillStyle = BIOME.groundBase;
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+            
+            // 2. Textura "Hormigón desgastado"
+            // Patrón de manchas
+            ctx.fillStyle = 'rgba(0,0,0,0.1)';
+            for(let i=0; i<p.width; i+=40) {
+                 let patchH = (Math.sin(i)*10 + 20);
+                 ctx.fillRect(p.x + i, p.y + 10, 20, p.height - 10);
+            }
+
+            // 3. Borde Superior (El "Top" original mejorado)
+            ctx.fillStyle = BIOME.topHighlight;
+            ctx.fillRect(p.x, p.y, p.width, 12);
+            
+            // 4. Detalles Industriales (Rejillas y remaches)
+            ctx.fillStyle = '#1a221d'; // Color oscuro metálico
+            // Línea divisoria bajo el borde
+            ctx.fillRect(p.x, p.y + 12, p.width, 4);
+            
+            // Remaches cada X pixeles
+            ctx.fillStyle = '#5a6e62';
+            for(let i=10; i<p.width; i+=50) {
+                ctx.fillRect(p.x + i, p.y + 14, 4, 4);
+                // Grieta vertical u óxido
+                ctx.fillStyle = 'rgba(20, 10, 0, 0.15)';
+                ctx.fillRect(p.x + i, p.y + 20, 4, p.height/2);
+                ctx.fillStyle = '#5a6e62'; // Restaurar color remache
+            }
+            
+            // 5. Decoración "Procedural" simple
+            // Cajas o tuberías sobre la plataforma
+            // Solo si hay espacio
+            if (p.width > 100) {
+                let seed = p.x % 100;
+                if (seed > 50) {
+                    // Tubería saliendo del suelo
+                    ctx.fillStyle = '#222';
+                    ctx.fillRect(p.x + 30, p.y - 15, 10, 15);
+                    ctx.fillStyle = '#444';
+                    ctx.fillRect(p.x + 28, p.y - 18, 14, 6); // Brida
+                }
+            }
+        });
+    }
+
+    // --- NUEVO FOREGROUND (2 Capas sutiles) ---
+    function drawForeground(ctx, cameraX) {
+        // Capa 1: Lluvia / Partículas de aire (Muy sutil)
+        // Se mueve con la cámara un poco
+        let rainOffset = (gameTime * 15) % GAME_HEIGHT;
+        ctx.fillStyle = 'rgba(150, 170, 160, 0.08)'; // Lluvia grisácea
+        
+        // Dibujamos lineas de lluvia aleatorias pero estables
+        // Usamos un bucle fijo para no matar el rendimiento
+        for(let r=0; r<100; r++) {
+            let rx = (r * 137) % GAME_WIDTH;
+            let ry = (r * 53 + rainOffset) % GAME_HEIGHT;
+            ctx.fillRect(rx, ry, 1, 15); // Gota larga
+        }
+
+        // Capa 2: Objetos negros borrosos muy rápidos (Vigas en primer plano)
+        let speed = 1.5;
+        let parallaxX = -cameraX * speed;
+        
+        ctx.save();
+        ctx.translate(parallaxX, 0);
+        
+        // Solo unas pocas vigas grandes cada tanto
+        let gap = 1500;
+        let startI = Math.floor(-parallaxX / gap);
+        let endI = startI + 2;
+        
+        ctx.fillStyle = '#000'; // Silueta negra pura
+        for(let i = startI; i < endI; i++) {
+            let x = i * gap;
+            // Viga vertical
+            ctx.fillRect(x, 0, 80, GAME_HEIGHT);
+            // Detalles de la viga (agujeros) para que no sea un bloque aburrido
+            ctx.fillStyle = 'rgba(10,10,10,1)'; 
+            ctx.fillRect(x+10, 0, 60, GAME_HEIGHT); // Interior un poco más claro
+            
+            // Remaches cruzados (X)
+            ctx.fillStyle = '#000';
+            for(let j=0; j<GAME_HEIGHT; j+=100) {
+                ctx.fillRect(x, j, 80, 10); // Barra horizontal
+            }
+        }
+        ctx.restore();
+    }
+
+    // --- BUCLE PRINCIPAL (LÓGICA INTACTA) ---
+    function loop() {
+        gameTime++;
+        
+        // Movimiento de cámara original
+        camera.x = Math.sin(gameTime * 0.01) * 200;
+        
+        player.update();
+        walker.update();
+        flyer.update();
+
+        // Render
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 1. Fondo (6 Capas)
+        drawBackground(ctx, camera.x, camera.y);
+        
+        // 2. Mapa (Mejorado)
+        ctx.save();
+        ctx.translate(-camera.x + 200, 0); 
+            drawMap(ctx);
+            // HACK VISUAL ORIGINAL: Restaurar para personajes
+            ctx.save();
+            ctx.translate(camera.x - 200, 0); 
+            ctx.restore();
+        ctx.restore();
+
+        // 3. Personajes (Código original)
+        // Se dibujan fijos en pantalla para el test, sobre el mapa móvil
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+
+        // 4. Primer Plano (2 Capas nuevas)
+        drawForeground(ctx, camera.x);
+        
+        // 5. Filtro de atmósfera ligero (Niebla urbana)
+        // Degrade inferior para simular suelo sucio
+        let fogGrad = ctx.createLinearGradient(0, GAME_HEIGHT - 100, 0, GAME_HEIGHT);
+        fogGrad.addColorStop(0, 'rgba(0,0,0,0)');
+        fogGrad.addColorStop(1, 'rgba(20,30,25,0.6)');
+        ctx.fillStyle = fogGrad;
+        ctx.fillRect(0, GAME_HEIGHT - 100, GAME_WIDTH, 100);
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>

@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Sector 2 - Deep Core</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #020202;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 50px rgba(0, 255, 170, 0.1);
+            border: 2px solid #222;
+            background: #000;
+            width: 1280px;
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            background-color: #05070a;
+            /* El pixel art se mantiene nítido, pero permitimos suavizado para las luces */
+            image-rendering: auto; 
+            width: 100%;
+            height: 100%;
+        }
+        /* Efecto CRT mejorado */
+        #scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: 
+                linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%),
+                linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+            background-size: 100% 3px, 4px 100%;
+            pointer-events: none;
+            z-index: 100;
+            opacity: 0.8;
+        }
+        #vignette {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, rgba(0,0,0,0) 60%, rgba(0,0,0,0.8) 100%);
+            pointer-events: none;
+            z-index: 90;
+        }
+        #ui-layer {
+            position: absolute; top: 20px; left: 20px; 
+            color: #00ffaa; z-index: 110;
+            text-shadow: 0 0 5px #00ffaa;
+            font-size: 14px;
+            background: rgba(0, 20, 10, 0.8);
+            padding: 15px;
+            border: 1px solid #004422;
+            border-radius: 4px;
+        }
+        h3 { margin: 0 0 10px 0; letter-spacing: 2px; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    <div id="vignette"></div>
+    <div id="scanlines"></div>
+    <div id="ui-layer">
+        <h3>SECTOR 2: FUNDICIÓN PROFUNDA</h3>
+        <p>Atmósfera: Densa / Tóxica</p>
+        <p>Motor de Partículas: ACTIVO</p>
+        <p>Renderizado: 6 Capas Fondo + 2 Frente</p>
+    </div>
+</div>
+
+<script>
+    /**
+     * NIVEL 2: DISEÑO VISUAL MEJORADO
+     * -------------------------------
+     * Se mantiene la lógica de las entidades (Player, Enemy) intacta.
+     * Se reescribe completamente el renderizado del entorno (Fondo, Plataformas, Efectos).
+     */
+
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- CONFIGURACIÓN DE COLORES (Nivel 2: Tonos Cobre, Cian Óxido y Sombras) ---
+    const THEME = {
+        skyTop: '#050810',
+        skyBottom: '#101820',
+        fog: 'rgba(10, 15, 20, 0.6)',
+        highlight: '#ffcc00', // Luces de peligro
+        metalDark: '#1a1a1a',
+        metalLight: '#3a4a5a',
+        rust: '#5a3a2a'
+    };
+
+    const COLORS = { 
+        player: '#e0e0e0', 
+        playerAccent: '#ffaa00', 
+        bullet: '#00ffaa', 
+        enemyBullet: '#ff4444', 
+        weapon: '#00ff00' 
+    };
+    
+    const ENEMY_COLOR = '#cc4444';
+
+    // --- SISTEMA DE PARTÍCULAS ---
+    const particles = [];
+
+    class Particle {
+        constructor(x, y, type) {
+            this.x = x; this.y = y;
+            this.type = type; // 'spark', 'smoke', 'dust', 'steam'
+            this.life = 1.0;
+            this.decay = Math.random() * 0.01 + 0.01;
+            
+            if (type === 'spark') {
+                this.vx = (Math.random() - 0.5) * 6;
+                this.vy = -(Math.random() * 4 + 2);
+                this.gravity = 0.3;
+                this.color = `hsl(${Math.random()*40 + 20}, 100%, 70%)`;
+                this.size = Math.random() * 2 + 1;
+            } else if (type === 'smoke') {
+                this.vx = (Math.random() - 0.5) * 1;
+                this.vy = -Math.random() * 1 - 0.2;
+                this.gravity = -0.01; // Sube
+                this.size = Math.random() * 10 + 5;
+                this.color = `rgba(20, 20, 20, 0.4)`;
+            } else if (type === 'steam') {
+                this.vx = (Math.random() - 0.5) * 0.5;
+                this.vy = -Math.random() * 2 - 1;
+                this.gravity = 0;
+                this.size = Math.random() * 4 + 2;
+                this.color = `rgba(200, 255, 255, 0.1)`;
+                this.decay = 0.02;
+            } else if (type === 'dust') {
+                this.vx = (Math.random() - 0.5) * 0.2;
+                this.vy = (Math.random() - 0.5) * 0.2;
+                this.gravity = 0;
+                this.size = Math.random() * 1.5;
+                this.color = 'rgba(255, 255, 255, 0.3)';
+                this.decay = 0.005;
+                this.life = Math.random(); // Inician en diferente estado
+            }
+        }
+
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            this.vy += this.gravity;
+            this.life -= this.decay;
+            
+            // Rebote simple para chispas
+            if (this.type === 'spark' && this.y > 540 && this.vy > 0) {
+                this.vy *= -0.5;
+                this.y = 540;
+            }
+        }
+
+        draw(ctx, camX, camY) {
+            ctx.globalAlpha = Math.max(0, this.life);
+            ctx.fillStyle = this.color;
+            
+            if (this.type === 'spark') {
+                ctx.shadowBlur = 5;
+                ctx.shadowColor = '#ff5500';
+            } else {
+                ctx.shadowBlur = 0;
+            }
+
+            ctx.beginPath();
+            ctx.arc(this.x - camX, this.y - camY, this.size, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+            ctx.shadowBlur = 0;
+        }
+    }
+
+    function spawnParticles(x, y, count, type) {
+        for(let i=0; i<count; i++) particles.push(new Particle(x, y, type));
+    }
+
+    // Llenar ambiente con polvo
+    for(let i=0; i<50; i++) {
+        let p = new Particle(Math.random() * GAME_WIDTH, Math.random() * GAME_HEIGHT, 'dust');
+        particles.push(p);
+    }
+
+    // --- ENTIDADES (LÓGICA INTACTA) ---
+    // Solo se modifica draw() si es necesario para efectos, pero se mantiene la base.
+
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 24; this.height = 40;
+            this.vx = 0; 
+            this.animTimer = 0;
+            this.facingRight = true;
+            this.state = 'wait'; 
+            this.stateTimer = 0;
+        }
+
+        update() {
+            this.animTimer++;
+            this.stateTimer++;
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { 
+                    this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left';
+                    this.stateTimer = 0;
+                }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3; this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3; this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+
+            // Generar polvo al caminar
+            if (Math.abs(this.vx) > 0 && this.animTimer % 10 === 0) {
+                spawnParticles(this.x + 12, this.y + 40, 1, 'smoke');
+            }
+        }
+
+        draw(ctx) {
+            ctx.save(); ctx.fillStyle = COLORS.player;
+            let lean = 0; if (Math.abs(this.vx) > 1) lean = this.facingRight ? 3 : -3; 
+            ctx.translate(lean, 0);
+            
+            // Animación piernas
+            if (Math.abs(this.vx) > 0.5) {
+                let cycle = Math.sin(this.animTimer * 0.5);
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15 + cycle * 3); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15 - cycle * 3);
+            } else { 
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15); 
+            }
+            
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x, this.y + 10, this.width, 18);
+            ctx.fillStyle = '#55f'; ctx.fillRect(this.facingRight ? this.x - 4 : this.x + 20, this.y + 12, 4, 10);
+            ctx.fillStyle = '#333'; ctx.fillRect(this.x + 2, this.y, 20, 12); 
+            // Visor con glow
+            ctx.shadowBlur = 5; ctx.shadowColor = COLORS.playerAccent;
+            ctx.fillStyle = COLORS.playerAccent; ctx.fillRect(this.facingRight ? this.x + 12 : this.x + 2, this.y + 3, 10, 4); 
+            ctx.shadowBlur = 0;
+
+            ctx.fillStyle = '#555';
+            let gunX = this.facingRight ? this.x + 14 : this.x - 6; 
+            let gunY = this.y + 14;
+            ctx.fillRect(gunX, gunY, 16, 6);
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 30;
+            this.vx = 2; this.dir = 1; this.timer = 0; this.state = 'walk'; this.startX = x;
+        }
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) { this.state = 'wait'; this.waitTimer = 60; }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) { this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk'; }
+            }
+        }
+        draw(ctx) {
+            ctx.fillStyle = ENEMY_COLOR;
+            let anim = Math.sin(this.timer * 0.2);
+            let drawY = this.y - 10; 
+            
+            // Sombra metálica
+            ctx.fillStyle = '#802020';
+            ctx.fillRect(this.x, drawY, this.width, this.height);
+            // Detalles mecánicos
+            ctx.fillStyle = '#401010';
+            ctx.fillRect(this.x + 5, drawY+5, 20, 20);
+
+            // Ojo brillante
+            ctx.shadowBlur = 10; ctx.shadowColor = '#ff0000';
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x + 10, drawY + 5, 10, 10); 
+            ctx.fillStyle = '#f00'; ctx.fillRect(this.x + 13, drawY + 8, 4, 4);
+            ctx.shadowBlur = 0;
+            
+            ctx.fillStyle = ENEMY_COLOR; 
+            ctx.save(); ctx.translate(this.x + 5, drawY + 15); ctx.rotate(anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.save(); ctx.translate(this.x + 25, drawY + 15); ctx.rotate(-anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.fillRect(this.x + 5, drawY + 30, 5, 10 + anim * 5); 
+            ctx.fillRect(this.x + 20, drawY + 30, 5, 10 - anim * 5);
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 20; this.startX = x; this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1; 
+            
+            // Humo del motor
+            if (this.timer % 5 === 0) spawnParticles(this.x + 15, this.y + 10, 1, 'smoke');
+        }
+        draw(ctx) {
+            let flap = Math.sin(this.timer * 0.8) * 10;
+            ctx.fillStyle = ENEMY_COLOR;
+            ctx.fillRect(this.x, this.y, 30, 20); 
+            ctx.fillStyle = '#555'; // Metal más oscuro
+            ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(this.x - 10, this.y - 10 + flap); ctx.lineTo(this.x + 10, this.y); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(this.x + 30, this.y); ctx.lineTo(this.x + 40, this.y - 10 + flap); ctx.lineTo(this.x + 20, this.y); ctx.fill(); 
+            
+            // Motor incandescente
+            ctx.shadowBlur = 8; ctx.shadowColor = '#ffff00';
+            ctx.fillStyle = '#ff0'; ctx.fillRect(this.x + 10, this.y + 5, 10, 5);
+            ctx.shadowBlur = 0;
+        }
+    }
+
+    // --- INSTANCIAS ---
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450);
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200, type: 'floor' },
+        { x: 750, y: 490, width: 400, height: 20, type: 'floating' } 
+    ];
+
+    // --- VARIABLES DE SIMULACIÓN ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+
+    // --- RENDERIZADO DE FONDO (PARALLAX 6 CAPAS) ---
+    function drawDetailedBackground(ctx, camX, camY) {
+        // Cielo degradado oscuro
+        let grad = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        grad.addColorStop(0, THEME.skyTop);
+        grad.addColorStop(1, THEME.skyBottom);
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+        const t = gameTime;
+
+        // Definición de las 6 capas de fondo
+        const layers = [
+            // CAPA 1: Estructuras masivas lejanas (Casi estáticas)
+            { speed: 0.05, color: '#080808', yOff: 100, scale: 1.5, type: 'skyline' },
+            // CAPA 2: Siluetas de tuberías gigantes
+            { speed: 0.1, color: '#0d1015', yOff: 50, scale: 1, type: 'pipes' },
+            // CAPA 3: Maquinaria media distancia
+            { speed: 0.25, color: '#121820', yOff: 0, scale: 0.8, type: 'factory' },
+            // CAPA 4: Engranajes y pistones (Lentos)
+            { speed: 0.4, color: '#1a222a', yOff: -50, scale: 1, type: 'gears' },
+            // CAPA 5: Columnas de soporte principales
+            { speed: 0.6, color: '#222d35', yOff: -100, scale: 1, type: 'columns' },
+            // CAPA 6: Niebla baja trasera
+            { speed: 0.7, color: 'rgba(50, 60, 70, 0.2)', yOff: 0, scale: 1, type: 'fog' }
+        ];
+
+        layers.forEach((layer, index) => {
+            ctx.save();
+            let pX = -(camX * layer.speed) % 2000; // Ciclo cada 2000px
+            if (pX > 0) pX -= 2000;
+            ctx.translate(pX, layer.yOff - (camY * layer.speed * 0.1));
+
+            ctx.fillStyle = layer.color;
+            
+            // Dibujamos 2 veces para cubrir el loop
+            for(let k=0; k<2; k++) {
+                let xOff = k * 2000; 
+
+                if (layer.type === 'skyline') {
+                    // Edificios monolíticos al fondo
+                    for(let i=0; i<20; i++) {
+                        let h = 200 + Math.sin(i*132.1)*100;
+                        let w = 80 + Math.cos(i)*40;
+                        ctx.fillRect(xOff + i*100, GAME_HEIGHT - h, w, h);
+                        // Luces rojas tenues distantes
+                        if (i%3===0) {
+                            ctx.fillStyle = '#300';
+                            ctx.fillRect(xOff + i*100 + 10, GAME_HEIGHT - h + 10, 5, 5);
+                            ctx.fillStyle = layer.color;
+                        }
+                    }
+                }
+                else if (layer.type === 'pipes') {
+                    // Tuberías grandes
+                    ctx.beginPath();
+                    for(let i=0; i<10; i++) {
+                        ctx.rect(xOff + i*250, 100, 200, GAME_HEIGHT); // Verticales gruesas
+                        ctx.rect(xOff, 300 + Math.sin(i)*50, 2000, 40); // Horizontales
+                    }
+                    ctx.fill();
+                }
+                else if (layer.type === 'factory') {
+                    // Estructura industrial detallada
+                    for(let i=0; i<15; i++) {
+                        let h = 300 + Math.abs(Math.sin(i*44))*150;
+                        ctx.fillRect(xOff + i*150, GAME_HEIGHT - h, 140, h);
+                        // Ventanas iluminadas
+                        ctx.fillStyle = (Math.sin(gameTime*0.05 + i) > 0.8) ? '#aa8800' : '#222';
+                        ctx.fillRect(xOff + i*150 + 20, GAME_HEIGHT - h + 40, 20, 40);
+                        ctx.fillStyle = layer.color;
+                    }
+                }
+                else if (layer.type === 'gears') {
+                    // Engranajes simulados (círculos dentados)
+                    for(let i=0; i<8; i++) {
+                        let cx = xOff + i*300;
+                        let cy = 400;
+                        ctx.translate(cx, cy);
+                        ctx.rotate(gameTime * 0.01 * (i%2==0?1:-1));
+                        // Dibujar engranaje
+                        for(let r=0; r<8; r++) {
+                            ctx.rotate(Math.PI/4);
+                            ctx.fillRect(-10, -50, 20, 100);
+                        }
+                        ctx.beginPath(); ctx.arc(0,0, 40, 0, Math.PI*2); ctx.fill();
+                        ctx.rotate(-(gameTime * 0.01 * (i%2==0?1:-1))); // Reset rot
+                        ctx.translate(-cx, -cy);
+                    }
+                }
+                else if (layer.type === 'columns') {
+                    // Vigas de soporte más cercanas
+                    for(let i=0; i<10; i++) {
+                        ctx.fillRect(xOff + i*220, 0, 40, GAME_HEIGHT);
+                        // Remaches
+                        ctx.fillStyle = '#111';
+                        for(let j=0; j<20; j++) ctx.fillRect(xOff + i*220 + 5, j*40, 5, 5);
+                        ctx.fillStyle = layer.color;
+                    }
+                }
+                else if (layer.type === 'fog') {
+                    // Niebla usando gradientes
+                    let g = ctx.createLinearGradient(0, GAME_HEIGHT-200, 0, GAME_HEIGHT);
+                    g.addColorStop(0, 'rgba(0,0,0,0)');
+                    g.addColorStop(1, layer.color);
+                    ctx.fillStyle = g;
+                    ctx.fillRect(xOff, GAME_HEIGHT-250, 2000, 250);
+                }
+            }
+            ctx.restore();
+        });
+    }
+
+    // --- RENDERIZADO DE PLATAFORMAS (Texturizado Procedural) ---
+    function drawDetailedMap(ctx, camX) {
+        // Configurar patrón de franjas de peligro
+        const stripeCanvas = document.createElement('canvas');
+        stripeCanvas.width = 20; stripeCanvas.height = 20;
+        const sCtx = stripeCanvas.getContext('2d');
+        sCtx.fillStyle = '#222'; sCtx.fillRect(0,0,20,20);
+        sCtx.fillStyle = '#aa8800'; 
+        sCtx.beginPath(); sCtx.moveTo(0,20); sCtx.lineTo(20,0); sCtx.lineTo(10,0); sCtx.lineTo(0,10); sCtx.fill();
+        sCtx.beginPath(); sCtx.moveTo(10,20); sCtx.lineTo(20,20); sCtx.lineTo(20,10); sCtx.fill();
+        const hazardPattern = ctx.createPattern(stripeCanvas, 'repeat');
+
+        platforms.forEach(p => {
+            // Posición real en pantalla
+            let drawX = p.x; 
+            let drawY = p.y;
+            
+            // Cuerpo principal de la plataforma
+            ctx.fillStyle = '#1e1e24';
+            ctx.fillRect(drawX, drawY, p.width, p.height);
+
+            // Borde metálico iluminado (Highlight superior)
+            ctx.fillStyle = '#506070';
+            ctx.fillRect(drawX, drawY, p.width, 4);
+
+            // Franjas de peligro en los bordes
+            ctx.fillStyle = hazardPattern;
+            ctx.fillRect(drawX, drawY + 4, p.width, 16);
+            
+            // Sombra bajo la franja
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(drawX, drawY + 20, p.width, 4);
+
+            // Textura interna: Rejilla metálica y remaches
+            ctx.fillStyle = '#15151a';
+            if (p.type === 'floor') {
+                for (let i = 0; i < p.width; i += 40) {
+                    // Vigas verticales de soporte
+                    ctx.fillRect(drawX + i, drawY + 24, 10, p.height - 24);
+                    // Remaches
+                    ctx.fillStyle = '#0a0a0a';
+                    ctx.beginPath(); ctx.arc(drawX + i + 5, drawY + 40, 2, 0, Math.PI*2); ctx.fill();
+                    ctx.fillStyle = '#15151a';
+                }
+            } else {
+                // Plataforma flotante - Estilo "Truss"
+                ctx.fillStyle = '#2a2a30';
+                ctx.beginPath();
+                ctx.moveTo(drawX, drawY+20);
+                for(let i=0; i<=p.width; i+=20) {
+                    ctx.lineTo(drawX + i, drawY+p.height);
+                    ctx.lineTo(drawX + i + 10, drawY+20);
+                }
+                ctx.stroke();
+            }
+
+            // Decoración: Ventiladores en el suelo
+            if (p.type === 'floor') {
+                let fanX = drawX + 250;
+                let fanY = drawY + 50;
+                // Marco
+                ctx.fillStyle = '#111';
+                ctx.fillRect(fanX, fanY, 60, 60);
+                // Aspas girando
+                ctx.save();
+                ctx.translate(fanX + 30, fanY + 30);
+                ctx.rotate(gameTime * 0.2);
+                ctx.fillStyle = '#333';
+                ctx.fillRect(-25, -5, 50, 10);
+                ctx.fillRect(-5, -25, 10, 50);
+                ctx.restore();
+                // Rejilla encima
+                ctx.strokeStyle = '#444';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                for(let k=0; k<=60; k+=10) {
+                    ctx.moveTo(fanX, fanY + k); ctx.lineTo(fanX+60, fanY+k);
+                }
+                ctx.stroke();
+
+                // Generar partículas de vapor
+                if (gameTime % 20 === 0) spawnParticles(fanX + 30, fanY, 1, 'steam');
+            }
+        });
+    }
+
+    // --- RENDERIZADO FOREGROUND (2 CAPAS AL FRENTE) ---
+    function drawForeground(ctx, camX) {
+        // Capa F1: Cadenas y cables colgantes desenfocados (Muy cerca)
+        // Se mueven más rápido que todo (Parallax negativo o muy alto)
+        let speed = 1.2;
+        let pX = -(camX * speed) % 1500;
+        if (pX > 0) pX -= 1500;
+        
+        ctx.save();
+        ctx.translate(pX, 0);
+        ctx.filter = 'blur(4px)'; // Efecto de profundidad de campo
+        ctx.fillStyle = '#000';
+        
+        for(let k=0; k<2; k++) { // Loop para cubrir pantalla
+            let xOff = k * 1500;
+            // Cadenas
+            for(let i=0; i<5; i++) {
+                let x = xOff + i * 300 + 100;
+                ctx.fillRect(x, -50, 10, 500); // Cadena gruesa
+                // Eslabones
+                ctx.clearRect(x+3, 0, 4, 500); 
+            }
+        }
+        ctx.filter = 'none';
+        ctx.restore();
+
+        // Capa F2: Partículas atmosféricas y chispas globales
+        // Niebla inferior
+        let grad = ctx.createLinearGradient(0, GAME_HEIGHT-100, 0, GAME_HEIGHT);
+        grad.addColorStop(0, 'rgba(0,0,0,0)');
+        grad.addColorStop(1, 'rgba(0, 10, 20, 0.8)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, GAME_HEIGHT-100, GAME_WIDTH, 100);
+
+        // Iluminación global (Tint azulado oscuro)
+        ctx.globalCompositeOperation = 'multiply';
+        ctx.fillStyle = 'rgba(0, 20, 40, 0.3)';
+        ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+        ctx.globalCompositeOperation = 'source-over';
+    }
+
+    // --- BUCLE PRINCIPAL ---
+    function loop() {
+        gameTime++;
+        
+        // Simular movimiento de cámara (Manteniendo la lógica del test original)
+        // Hacemos que la cámara avance lentamente hacia la derecha para simular progresión
+        camera.x = Math.sin(gameTime * 0.01) * 200 + gameTime * 0.5; 
+        
+        // --- ACTUALIZAR ---
+        player.update();
+        walker.update();
+        flyer.update();
+
+        // Generar partículas de ambiente aleatorias (chispas cayendo del techo)
+        if (Math.random() < 0.05) {
+            spawnParticles(camera.x + Math.random() * GAME_WIDTH, 0, 1, 'spark');
+        }
+
+        particles.forEach((p, i) => {
+            p.update();
+            if (p.life <= 0) particles.splice(i, 1);
+        });
+
+        // --- RENDERIZAR ---
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 1. Fondo (6 capas)
+        drawDetailedBackground(ctx, camera.x, camera.y);
+        
+        // Configurar vista del juego (Cámara)
+        // Truco del test original: El mundo se mueve, pero el jugador se mantiene en pantalla relativa
+        // Para este nivel avanzado, calculamos un offset para mantener al jugador visible
+        // pero dando la ilusión de movimiento infinito.
+        
+        let visualOffsetX = -(camera.x % GAME_WIDTH); // Loop visual del suelo
+        let relativePlayerX = 200; // Jugador fijo en X visualmente para el test
+
+        ctx.save();
+        
+        // TRUCO VISUAL: 
+        // En lugar de mover todo el contexto con la cámara, vamos a dibujar las plataformas
+        // de forma que parezca que el jugador avanza.
+        
+        // 2. Plataformas (Mundo)
+        // Para que se sienta infinito o nivel largo, dibujamos las plataformas en ciclo relativo a la cámara
+        ctx.translate(-camera.x + 200, 0); 
+        
+        // Dibujamos las plataformas originales
+        drawDetailedMap(ctx, camera.x);
+        
+        // Dibujamos partículas que están en el "mundo"
+        particles.forEach(p => p.draw(ctx, 0, 0));
+
+        // 3. Entidades
+        // Las entidades tienen coordenadas de mundo, las dibujamos ahí.
+        // NOTA: Como en el test original, las entidades se controlan solas.
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+
+        ctx.restore();
+
+        // 4. Primer Plano (Foreground 2 capas) y Efectos de Pantalla
+        drawForeground(ctx, camera.x);
+
+        requestAnimationFrame(loop);
+    }
+
+    // Iniciar
+    loop();
+
+</script>
+</body>
+</html>

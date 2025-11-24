@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Mothership Core</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 50px rgba(0, 100, 255, 0.2);
+            border: 2px solid #333;
+            background: #000;
+            width: 1280px;
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            background-color: #000;
+            width: 100%;
+            height: 100%;
+        }
+        /* Scanlines más sutiles para no tapar el detalle */
+        #scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(0,0,0,0) 50%, rgba(0,0,0,0.15) 50%);
+            background-size: 100% 4px;
+            pointer-events: none;
+            z-index: 100;
+            opacity: 0.7;
+        }
+        #overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, rgba(0,0,0,0) 60%, rgba(0,10,20,0.8) 100%);
+            pointer-events: none;
+            z-index: 90;
+        }
+        #debug-ui {
+            position: absolute; top: 10px; left: 10px; color: #00ffaa; z-index: 110;
+            background: rgba(0,0,0,0.8); padding: 10px; border: 1px solid #005544;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="testCanvas"></canvas>
+    <div id="scanlines"></div>
+    <div id="overlay"></div>
+    <div id="debug-ui">
+        <h3>NIVEL: NÚCLEO DE LA NAVE</h3>
+        <p>Entidades: ORIGINALES</p>
+        <p>Render: Parallax Complejo (Procedural)</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- COLORES ORIGINALES (RESTAURADOS) ---
+    const COLORS = { 
+        player: '#e0e0e0', 
+        playerAccent: '#ffaa00', 
+        bullet: '#00ffaa', 
+        enemyBullet: '#ff4444', 
+        weapon: '#00ff00' 
+    };
+    const ENEMY_COLOR = '#cc4444';
+
+    // --- VARIABLES GLOBALES ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+
+    // --- SISTEMA DE PARTÍCULAS (EFECTOS VISUALES) ---
+    let particles = [];
+    class Particle {
+        constructor(x, y, type) {
+            this.x = x; this.y = y; this.type = type;
+            this.life = 1.0;
+            this.vx = (Math.random() - 0.5) * 2;
+            this.vy = (Math.random() - 0.5) * 2;
+            this.size = Math.random() * 3;
+        }
+        update() {
+            this.x += this.vx; this.y += this.vy; this.life -= 0.02;
+            if(this.type === 'spark') this.vy += 0.1; // Gravedad
+        }
+        draw(ctx) {
+            ctx.globalAlpha = this.life;
+            ctx.fillStyle = this.type === 'spark' ? '#fff' : '#00ffff';
+            ctx.fillRect(this.x, this.y, this.size, this.size);
+            ctx.globalAlpha = 1.0;
+        }
+    }
+
+    // --- CLASES ORIGINALES (MOCKS) ---
+    // NO MODIFICADAS VISUALMENTE, SOLO LÓGICA DE DIBUJO ORIGINAL
+
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 24; this.height = 40;
+            this.vx = 0; this.animTimer = 0; this.facingRight = true;
+            this.state = 'wait'; this.stateTimer = 0;
+        }
+        update() {
+            this.animTimer++; this.stateTimer++;
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3; this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3; this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+        }
+        draw(ctx) {
+            // --- CÓDIGO ORIGINAL ---
+            ctx.save(); ctx.fillStyle = COLORS.player;
+            let lean = 0; if (Math.abs(this.vx) > 1) lean = this.facingRight ? 3 : -3; 
+            ctx.translate(lean, 0);
+            if (Math.abs(this.vx) > 0.5) {
+                let cycle = Math.sin(this.animTimer * 0.5);
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15 + cycle * 3); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15 - cycle * 3);
+            } else { 
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15); 
+            }
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x, this.y + 10, this.width, 18);
+            ctx.fillStyle = '#55f'; ctx.fillRect(this.facingRight ? this.x - 4 : this.x + 20, this.y + 12, 4, 10);
+            ctx.fillStyle = '#333'; ctx.fillRect(this.x + 2, this.y, 20, 12);
+            ctx.fillStyle = COLORS.playerAccent; ctx.fillRect(this.facingRight ? this.x + 12 : this.x + 2, this.y + 3, 10, 4);
+            ctx.fillStyle = '#555';
+            let gunX = this.facingRight ? this.x + 14 : this.x - 6; 
+            let gunY = this.y + 14;
+            ctx.fillRect(gunX, gunY, 16, 6);
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 30; this.height = 30;
+            this.vx = 2; this.dir = 1; this.timer = 0; this.state = 'walk'; this.startX = x;
+        }
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) { this.state = 'wait'; this.waitTimer = 60; }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) { this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk'; }
+            }
+        }
+        draw(ctx) {
+            // --- CÓDIGO ORIGINAL ---
+            ctx.fillStyle = ENEMY_COLOR;
+            let anim = Math.sin(this.timer * 0.2);
+            let drawY = this.y - 10; 
+            ctx.fillRect(this.x, drawY, this.width, this.height);
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x + 10, drawY + 5, 10, 10); 
+            ctx.fillStyle = '#f00'; ctx.fillRect(this.x + 13, drawY + 8, 4, 4);
+            ctx.fillStyle = ENEMY_COLOR; 
+            ctx.save(); ctx.translate(this.x + 5, drawY + 15); ctx.rotate(anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.save(); ctx.translate(this.x + 25, drawY + 15); ctx.rotate(-anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.fillRect(this.x + 5, drawY + 30, 5, 10 + anim * 5); 
+            ctx.fillRect(this.x + 20, drawY + 30, 5, 10 - anim * 5);
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 30; this.height = 20; this.startX = x; this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1; 
+        }
+        draw(ctx) {
+            // --- CÓDIGO ORIGINAL ---
+            let flap = Math.sin(this.timer * 0.8) * 10;
+            ctx.fillStyle = ENEMY_COLOR;
+            ctx.fillRect(this.x, this.y, 30, 20); 
+            ctx.fillStyle = '#777'; 
+            ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(this.x - 10, this.y - 10 + flap); ctx.lineTo(this.x + 10, this.y); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(this.x + 30, this.y); ctx.lineTo(this.x + 40, this.y - 10 + flap); ctx.lineTo(this.x + 20, this.y); ctx.fill(); 
+            ctx.fillStyle = '#ff0'; ctx.fillRect(this.x + 10, this.y + 5, 10, 5);
+        }
+    }
+
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450);
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200 },
+        { x: 750, y: 490, width: 400, height: 20 }
+    ];
+
+    // ==========================================
+    // === NUEVO MOTOR DE RENDERIZADO (FONDO) ===
+    // ==========================================
+
+    // Generamos estrellas estáticas una vez
+    const stars = Array.from({length: 150}, () => ({
+        x: Math.random() * GAME_WIDTH, y: Math.random() * GAME_HEIGHT, size: Math.random() * 2, alpha: Math.random()
+    }));
+
+    function drawSpaceBackground(ctx, camX, camY) {
+        // 1. Fondo base (Espacio profundo)
+        let grad = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        grad.addColorStop(0, '#020205'); grad.addColorStop(1, '#0a0a15');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0,0, GAME_WIDTH, GAME_HEIGHT);
+
+        // 2. Estrellas (Parallax muy lejano 0.05)
+        ctx.save();
+        ctx.translate(-camX * 0.05, -camY * 0.05);
+        ctx.fillStyle = '#fff';
+        stars.forEach(s => {
+            let dx = (s.x + camX * 0.05) % GAME_WIDTH; // Wrap
+            if(dx < 0) dx += GAME_WIDTH;
+            ctx.globalAlpha = s.alpha + Math.sin(gameTime * 0.05) * 0.2;
+            ctx.fillRect(dx, s.y, s.size, s.size);
+        });
+        ctx.restore();
+
+        // 3. Planeta o Nebulosa lejana (Ventanal)
+        ctx.save();
+        let nebulaX = 800 - camX * 0.1;
+        let nebulaGrad = ctx.createRadialGradient(nebulaX, 300, 10, nebulaX, 300, 400);
+        nebulaGrad.addColorStop(0, 'rgba(0, 100, 255, 0.2)');
+        nebulaGrad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = nebulaGrad;
+        ctx.fillRect(0,0, GAME_WIDTH, GAME_HEIGHT);
+        ctx.restore();
+    }
+
+    // Función auxiliar para dibujar patrones repetitivos (tiles)
+    function drawTiledLayer(ctx, camX, speed, width, drawCallback) {
+        ctx.save();
+        let px = -camX * speed;
+        ctx.translate(px, 0);
+        let startI = Math.floor(-px / width) - 1;
+        let endI = startI + Math.ceil(GAME_WIDTH / width) + 2;
+        
+        for(let i = startI; i < endI; i++) {
+            ctx.save();
+            ctx.translate(i * width, 0);
+            drawCallback(ctx, i);
+            ctx.restore();
+        }
+        ctx.restore();
+    }
+
+    function drawParallaxLayers(ctx, camX, camY) {
+        // CAPA 1: Estructura Externa Masiva (Oscura, lenta - 0.2)
+        drawTiledLayer(ctx, camX, 0.2, 400, (c, i) => {
+            c.fillStyle = '#080808';
+            // Vigas gigantes diagonales
+            c.beginPath(); c.moveTo(0,0); c.lineTo(50,0); c.lineTo(400, 720); c.lineTo(350, 720); c.fill();
+            // Remaches
+            c.fillStyle = '#151515';
+            c.fillRect(100, 200, 20, 20); c.fillRect(200, 400, 20, 20);
+        });
+
+        // CAPA 2: Maquinaria y Tuberías (Media - 0.4)
+        drawTiledLayer(ctx, camX, 0.4, 300, (c, i) => {
+            // Tuberías horizontales
+            c.fillStyle = '#11111a';
+            c.fillRect(0, 100, 300, 40);
+            c.fillRect(0, 600, 300, 40);
+            
+            // Cables curvos
+            c.strokeStyle = '#222'; c.lineWidth = 5;
+            c.beginPath(); c.moveTo(0, 120); c.bezierCurveTo(100, 300, 200, 300, 300, 120); c.stroke();
+
+            // Ventiladores
+            if (i % 2 === 0) {
+                let rot = gameTime * 0.05;
+                c.save(); c.translate(150, 360); 
+                c.fillStyle = '#1a1a22'; c.beginPath(); c.arc(0,0, 60, 0, Math.PI*2); c.fill();
+                c.rotate(rot);
+                c.fillStyle = '#333'; c.fillRect(-50, -10, 100, 20); c.fillRect(-10, -50, 20, 100);
+                c.restore();
+            }
+        });
+
+        // CAPA 3: Interior Detallado (Tecnología - 0.6)
+        drawTiledLayer(ctx, camX, 0.6, 200, (c, i) => {
+            c.fillStyle = '#181820';
+            // Columnas verticales
+            c.fillRect(50, 0, 40, GAME_HEIGHT);
+            
+            // Luces de servidores (parpadean)
+            let blink = Math.sin(gameTime * 0.1 + i) > 0;
+            c.fillStyle = blink ? '#00ffaa' : '#005533';
+            c.fillRect(60, 200, 10, 5); c.fillRect(60, 220, 10, 5); c.fillRect(60, 240, 20, 5);
+            
+            // Rejillas
+            c.fillStyle = '#000';
+            for(let j=0; j<10; j++) c.fillRect(55, 400 + j*10, 30, 2);
+        });
+
+        // CAPA 4: Ventanales y Marcos (Cercano - 0.8)
+        drawTiledLayer(ctx, camX, 0.8, 600, (c, i) => {
+            // Grandes marcos negros que dejan ver todo lo de atrás
+            c.fillStyle = '#000';
+            // Techo y suelo estructural
+            c.fillRect(0, 0, 600, 50);
+            c.fillRect(0, 670, 600, 50);
+            // Divisor de ventana inclinado
+            c.beginPath(); c.moveTo(580, 0); c.lineTo(600, 0); c.lineTo(20, 720); c.lineTo(0, 720); c.fill();
+            
+            // Brillo en el cristal
+            c.fillStyle = 'rgba(200, 255, 255, 0.03)';
+            c.beginPath(); c.moveTo(0, 50); c.lineTo(580, 50); c.lineTo(20, 670); c.lineTo(0, 670); c.fill();
+        });
+    }
+
+    // CAPA DELANTERA (Foreground - Parallax > 1.0)
+    function drawForeground(ctx, camX) {
+        drawTiledLayer(ctx, camX, 1.3, 1000, (c, i) => {
+             // Objetos borrosos que pasan rápido frente a la cámara
+             c.fillStyle = 'rgba(0, 5, 10, 0.8)';
+             // Grandes cadenas o estructuras colgantes
+             if (i % 2 === 0) {
+                 c.fillRect(200, -100, 50, 400);
+             }
+        });
+        
+        // Neblina global (overlay)
+        let fogGrad = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        fogGrad.addColorStop(0, 'rgba(0,0,0,0)');
+        fogGrad.addColorStop(0.8, 'rgba(0, 20, 50, 0.1)');
+        fogGrad.addColorStop(1, 'rgba(0, 10, 20, 0.3)');
+        ctx.fillStyle = fogGrad;
+        ctx.fillRect(0,0, GAME_WIDTH, GAME_HEIGHT);
+    }
+
+    // DIBUJAR MAPA (TEXTURIZADO)
+    function drawTexturedMap(ctx) {
+        platforms.forEach(p => {
+            // Cuerpo
+            let grad = ctx.createLinearGradient(p.x, p.y, p.x, p.y + p.height);
+            grad.addColorStop(0, '#333'); grad.addColorStop(1, '#111');
+            ctx.fillStyle = grad;
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+            
+            // Borde neón superior
+            ctx.shadowBlur = 10; ctx.shadowColor = '#00ffaa';
+            ctx.fillStyle = '#00ffaa';
+            ctx.fillRect(p.x, p.y, p.width, 3);
+            ctx.shadowBlur = 0;
+
+            // Decoración estilo "Precaución"
+            ctx.fillStyle = '#444';
+            for(let i=0; i<p.width; i+=40) {
+                ctx.beginPath();
+                ctx.moveTo(p.x + i, p.y + 10);
+                ctx.lineTo(p.x + i + 20, p.y + 10);
+                ctx.lineTo(p.x + i + 10, p.y + 30);
+                ctx.fill();
+            }
+        });
+    }
+
+    // --- BUCLE PRINCIPAL ---
+    function loop() {
+        gameTime++;
+        // Movimiento de cámara suave
+        camera.x = Math.sin(gameTime * 0.005) * 300; 
+
+        // Update lógica
+        player.update();
+        walker.update();
+        flyer.update();
+
+        // Partículas aleatorias (ambiente)
+        if(Math.random() > 0.8) particles.push(new Particle(Math.random()*GAME_WIDTH, Math.random()*GAME_HEIGHT, 'dust'));
+        particles.forEach((p, i) => {
+            p.update();
+            if(p.life <= 0) particles.splice(i, 1);
+        });
+
+        // --- RENDERIZADO ---
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 1. Fondo Estelar
+        drawSpaceBackground(ctx, camera.x, camera.y);
+
+        // 2. Capas Parallax Complejas (Detrás del juego)
+        drawParallaxLayers(ctx, camera.x, camera.y);
+
+        // --- MUNDO DEL JUEGO ---
+        ctx.save();
+        // Aplicamos cámara
+        ctx.translate(-camera.x + 200, 0); 
+        
+        drawTexturedMap(ctx);
+
+        // Truco visual del original para mantener entidades en pantalla
+        ctx.save();
+        ctx.translate(camera.x - 200, 0); 
+        // Aquí irían las coordenadas reales si la cámara siguiera al jugador,
+        // pero mantenemos el hack visual del testbed original.
+        ctx.restore();
+
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+
+        // Partículas en el mundo
+        particles.forEach(p => p.draw(ctx));
+
+        ctx.restore();
+
+        // 3. Primer Plano (Delante del juego)
+        drawForeground(ctx, camera.x);
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>

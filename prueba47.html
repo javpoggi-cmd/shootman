@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Level 2 - Under Construction</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #020202;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 60px rgba(255, 100, 0, 0.1);
+            border: 2px solid #222;
+            background: #000;
+            width: 1280px;
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            background-color: #050505;
+            /* Suavizado desactivado para pixel art, pero aquí usamos vectores detallados */
+            width: 100%;
+            height: 100%;
+        }
+        /* Efecto de viñeta y scanlines sutiles para atmósfera retro-moderna */
+        #overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: 
+                radial-gradient(circle at center, rgba(0,0,0,0) 60%, rgba(0,0,0,0.8) 100%),
+                linear-gradient(rgba(0, 0, 0, 0.1) 50%, rgba(0, 0, 0, 0.2) 50%);
+            background-size: 100% 100%, 100% 4px;
+            pointer-events: none;
+            z-index: 10;
+            mix-blend-mode: multiply;
+        }
+        #atmosphere {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle at 50% 0%, rgba(255, 150, 50, 0.05), transparent 60%);
+            pointer-events: none;
+            z-index: 9;
+        }
+        #debug-ui {
+            position: absolute; top: 20px; left: 20px; 
+            color: #ffaa00; 
+            z-index: 20;
+            background: rgba(0,0,0,0.85); 
+            padding: 15px;
+            border-left: 4px solid #ffaa00;
+            font-family: monospace;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        h3 { margin: 0 0 5px 0; font-size: 14px; color: #fff; }
+        p { margin: 0; font-size: 12px; color: #888; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    <div id="atmosphere"></div>
+    <div id="overlay"></div>
+    <div id="debug-ui">
+        <h3>Nivel 2: Sector en Obras</h3>
+        <p>Bioma: Rascacielos Incompletos</p>
+        <p>Efectos: Niebla, Partículas, 8 Capas Parallax</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // Configuración de Alta Resolución
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- PALETA DE COLORES AVANZADA ---
+    // Tonos más oxidados, anaranjados y azules oscuros para contraste
+    const THEME = {
+        skyTop: '#050810',
+        skyBottom: '#1a1820',
+        fog: 'rgba(20, 20, 25, 0.6)',
+        constructionOrange: '#ff9900',
+        constructionYellow: '#ffcc00',
+        scaffoldMetal: '#3a3a40',
+        hazardStripes: ['#111', '#eebb00'],
+        lights: ['#ffaa00', '#ff5555', '#aaccff']
+    };
+
+    // Colores originales de entidades (NO TOCAR)
+    const COLORS = { 
+        player: '#e0e0e0', playerAccent: '#ffaa00', bullet: '#00ffaa', enemyBullet: '#ff4444', weapon: '#00ff00' 
+    };
+    const ENEMY_COLOR = '#cc4444';
+
+    // --- VARIABLES GLOBALES ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+    
+    // --- PARTICULAS ---
+    const particles = [];
+    class Particle {
+        constructor(x, y, type) {
+            this.x = x; this.y = y;
+            this.type = type; // 'dust', 'spark', 'steam'
+            this.life = 1.0;
+            
+            if (type === 'dust') {
+                this.vx = (Math.random() - 0.5) * 0.5;
+                this.vy = (Math.random() - 0.5) * 0.5;
+                this.size = Math.random() * 2 + 1;
+                this.decay = 0.005;
+                this.color = `rgba(150, 150, 150, ${Math.random() * 0.3})`;
+            } else if (type === 'spark') {
+                this.vx = (Math.random() - 0.5) * 4;
+                this.vy = -Math.random() * 3;
+                this.size = Math.random() * 2;
+                this.decay = 0.05;
+                this.color = '#ffaa00';
+                this.gravity = 0.2;
+            } else if (type === 'steam') {
+                this.vx = 0.5 + Math.random();
+                this.vy = -1 - Math.random();
+                this.size = 5 + Math.random() * 10;
+                this.decay = 0.01;
+                this.color = `rgba(200, 200, 220, 0.2)`;
+            }
+        }
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            this.life -= this.decay;
+            
+            if (this.type === 'spark') this.vy += this.gravity;
+            if (this.type === 'steam') this.size += 0.1;
+        }
+        draw(ctx, camX, camY) {
+            ctx.fillStyle = this.type === 'dust' ? this.color : 
+                           this.type === 'spark' ? `rgba(255, 170, 0, ${this.life})` : 
+                           `rgba(200, 200, 220, ${this.life * 0.2})`;
+            
+            ctx.beginPath();
+            if (this.type === 'spark') {
+                ctx.rect(this.x - camX, this.y - camY, this.size, this.size);
+            } else {
+                ctx.arc(this.x - camX, this.y - camY, this.size, 0, Math.PI * 2);
+            }
+            ctx.fill();
+        }
+    }
+
+    // --- ENTIDADES (Lógica Original Intacta) ---
+    // Copia exacta de la lógica de tus entidades para mantener gameplay.
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 24; this.height = 40;
+            this.vx = 0; this.animTimer = 0; this.facingRight = true;
+            this.state = 'wait'; this.stateTimer = 0;
+        }
+        update() {
+            this.animTimer++; this.stateTimer++;
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3; this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3; this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+            
+            // Generar polvo al caminar
+            if (Math.abs(this.vx) > 0 && Math.random() > 0.8) {
+                particles.push(new Particle(this.x + 12, this.y + 40, 'dust'));
+            }
+        }
+        draw(ctx) { // Mismo dibujo original
+            ctx.save(); ctx.fillStyle = COLORS.player;
+            let lean = 0; if (Math.abs(this.vx) > 1) lean = this.facingRight ? 3 : -3; 
+            ctx.translate(lean, 0);
+            if (Math.abs(this.vx) > 0.5) {
+                let cycle = Math.sin(this.animTimer * 0.5);
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15 + cycle * 3); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15 - cycle * 3);
+            } else { ctx.fillRect(this.x + 4, this.y + 25, 6, 15); ctx.fillRect(this.x + 14, this.y + 25, 6, 15); }
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x, this.y + 10, this.width, 18);
+            ctx.fillStyle = '#55f'; ctx.fillRect(this.facingRight ? this.x - 4 : this.x + 20, this.y + 12, 4, 10);
+            ctx.fillStyle = '#333'; ctx.fillRect(this.x + 2, this.y, 20, 12);
+            ctx.fillStyle = COLORS.playerAccent; ctx.fillRect(this.facingRight ? this.x + 12 : this.x + 2, this.y + 3, 10, 4);
+            ctx.fillStyle = '#555';
+            let gunX = this.facingRight ? this.x + 14 : this.x - 6; let gunY = this.y + 14;
+            ctx.fillRect(gunX, gunY, 16, 6);
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 30; this.height = 30;
+            this.vx = 2; this.dir = 1; this.timer = 0; this.state = 'walk'; this.startX = x;
+        }
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) { this.state = 'wait'; this.waitTimer = 60; }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) { this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk'; }
+            }
+        }
+        draw(ctx) {
+            ctx.fillStyle = ENEMY_COLOR;
+            let anim = Math.sin(this.timer * 0.2); let drawY = this.y - 10; 
+            ctx.fillRect(this.x, drawY, this.width, this.height);
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x + 10, drawY + 5, 10, 10); 
+            ctx.fillStyle = '#f00'; ctx.fillRect(this.x + 13, drawY + 8, 4, 4);
+            ctx.fillStyle = ENEMY_COLOR; 
+            ctx.save(); ctx.translate(this.x + 5, drawY + 15); ctx.rotate(anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.save(); ctx.translate(this.x + 25, drawY + 15); ctx.rotate(-anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.fillRect(this.x + 5, drawY + 30, 5, 10 + anim * 5); 
+            ctx.fillRect(this.x + 20, drawY + 30, 5, 10 - anim * 5);
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 30; this.height = 20; this.startX = x; this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1; 
+        }
+        draw(ctx) {
+            let flap = Math.sin(this.timer * 0.8) * 10;
+            ctx.fillStyle = ENEMY_COLOR; ctx.fillRect(this.x, this.y, 30, 20); 
+            ctx.fillStyle = '#777'; 
+            ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(this.x - 10, this.y - 10 + flap); ctx.lineTo(this.x + 10, this.y); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(this.x + 30, this.y); ctx.lineTo(this.x + 40, this.y - 10 + flap); ctx.lineTo(this.x + 20, this.y); ctx.fill(); 
+            ctx.fillStyle = '#ff0'; ctx.fillRect(this.x + 10, this.y + 5, 10, 5);
+            // Efecto de motor
+            if (Math.random() > 0.5) particles.push(new Particle(this.x + 15, this.y + 20, 'dust'));
+        }
+    }
+
+    // --- SETUP DE NIVEL ---
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450);
+    const flyer = new MockFlyer(600, 200);
+
+    // Mismas dimensiones de plataformas para mantener la jugabilidad
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200 }, 
+        { x: 750, y: 490, width: 400, height: 20 }
+    ];
+
+    // --- GENERACIÓN DE PATRONES PARA TEXTURAS ---
+    // Creamos patrones en canvas offscreen para mejorar rendimiento y look
+    function createConstructionPattern() {
+        const pCanvas = document.createElement('canvas');
+        pCanvas.width = 20; pCanvas.height = 20;
+        const pCtx = pCanvas.getContext('2d');
+        pCtx.strokeStyle = '#222';
+        pCtx.lineWidth = 1;
+        pCtx.beginPath(); pCtx.moveTo(0,0); pCtx.lineTo(20,20); pCtx.stroke();
+        pCtx.beginPath(); pCtx.moveTo(20,0); pCtx.lineTo(0,20); pCtx.stroke();
+        return ctx.createPattern(pCanvas, 'repeat');
+    }
+    const girderPattern = createConstructionPattern();
+
+    function createFloorPattern() {
+        const pCanvas = document.createElement('canvas');
+        pCanvas.width = 40; pCanvas.height = 40;
+        const pCtx = pCanvas.getContext('2d');
+        pCtx.fillStyle = '#1e2124'; pCtx.fillRect(0,0,40,40);
+        pCtx.fillStyle = '#25282d'; pCtx.fillRect(0,0,20,20); pCtx.fillRect(20,20,20,20);
+        // Remaches
+        pCtx.fillStyle = '#333'; 
+        pCtx.fillRect(2,2,2,2); pCtx.fillRect(36,2,2,2);
+        pCtx.fillRect(2,36,2,2); pCtx.fillRect(36,36,2,2);
+        return ctx.createPattern(pCanvas, 'repeat');
+    }
+    const floorPattern = createFloorPattern();
+
+    // --- MOTOR DE DIBUJO DE FONDO ---
+    // 6 Capas de fondo + 2 Capas frontales
+    const bgLayers = [
+        { speed: 0.02, color: '#080808', yOff: 100, type: 'skyline_far' }, // 0: Siluetas lejanas
+        { speed: 0.05, color: '#0f0f12', yOff: 50, type: 'buildings_fog' }, // 1: Edificios genéricos
+        { speed: 0.1, color: '#141418', yOff: 0, type: 'cranes' },          // 2: Grúas y estructuras
+        { speed: 0.2, color: '#1a1a20', yOff: -50, type: 'construction' },  // 3: En construcción (vigas)
+        { speed: 0.4, color: '#202025', yOff: -20, type: 'details' },       // 4: Detalle medio
+        { speed: 0.6, color: '#252530', yOff: 0, type: 'close' }            // 5: Cercano
+    ];
+    
+    const fgLayers = [
+        { speed: 1.2, color: '#000', yOff: 0, type: 'pillars' },            // 6: Pilares rápidos (desenfoque)
+        { speed: 1.5, color: '#000', yOff: 0, type: 'wires' }               // 7: Cables muy cercanos
+    ];
+
+    function drawLayer(ctx, layer, camX, camY) {
+        let parallaxX = -camX * layer.speed;
+        let parallaxY = -camY * (layer.speed * 0.3); // Menos movimiento vertical
+        
+        ctx.save();
+        ctx.translate(parallaxX, parallaxY);
+
+        // Grid infinito
+        let spacing = (layer.type === 'skyline_far') ? 100 : 
+                      (layer.type === 'construction') ? 250 : 200;
+        
+        if (layer.type === 'cranes') spacing = 400;
+        if (layer.type === 'wires') spacing = 800;
+
+        let startI = Math.floor(-parallaxX / spacing) - 1;
+        let endI = startI + Math.ceil(GAME_WIDTH / spacing) + 2;
+
+        for (let i = startI; i < endI; i++) {
+            let x = i * spacing;
+            let seed = Math.sin(i * 123.45 + layer.speed * 50); // Pseudo-random consistente
+            let height = 200 + Math.abs(seed) * 300;
+            let y = GAME_HEIGHT - height + layer.yOff;
+            
+            // Variaciones visuales por capa
+            if (layer.type === 'skyline_far') {
+                ctx.fillStyle = layer.color;
+                ctx.fillRect(x, y, spacing + 1, height + 500);
+                // Luces de baliza
+                if (seed > 0.8) {
+                    ctx.fillStyle = '#f00';
+                    ctx.fillRect(x + spacing/2, y, 2, 2);
+                }
+            }
+            else if (layer.type === 'buildings_fog') {
+                ctx.fillStyle = layer.color;
+                ctx.fillRect(x + 10, y, spacing - 20, height + 500);
+            }
+            else if (layer.type === 'cranes') {
+                if (seed > 0.3) { // No en todos los segmentos
+                    // Dibujar Grúa
+                    ctx.strokeStyle = '#181818';
+                    ctx.lineWidth = 4;
+                    ctx.beginPath();
+                    ctx.moveTo(x + 50, GAME_HEIGHT);
+                    ctx.lineTo(x + 50, GAME_HEIGHT - 400); // Torre
+                    ctx.lineTo(x + 200, GAME_HEIGHT - 450); // Brazo
+                    ctx.stroke();
+                    // Contrapeso
+                    ctx.fillStyle = '#181818';
+                    ctx.fillRect(x + 20, GAME_HEIGHT - 400, 40, 20);
+                }
+            }
+            else if (layer.type === 'construction') {
+                // Edificios huecos (solo vigas)
+                ctx.fillStyle = layer.color;
+                // Columnas principales
+                ctx.fillRect(x, y, 20, height + 500);
+                ctx.fillRect(x + spacing - 20, y, 20, height + 500);
+                // Pisos
+                for (let fy = y; fy < GAME_HEIGHT; fy += 60) {
+                    ctx.fillRect(x, fy, spacing, 10);
+                    // Cables colgando
+                    if (Math.random() > 0.8) {
+                         ctx.strokeStyle = '#000'; ctx.lineWidth = 1;
+                         ctx.beginPath(); ctx.moveTo(x + 50, fy+10); ctx.quadraticCurveTo(x+60, fy+40, x+70, fy+10); ctx.stroke();
+                    }
+                }
+                // Relleno de patrón
+                ctx.fillStyle = girderPattern;
+                ctx.fillRect(x + 20, y, spacing - 40, height + 500);
+            }
+            else if (layer.type === 'close') {
+                ctx.fillStyle = layer.color;
+                let bWidth = spacing - 10;
+                ctx.fillRect(x, y, bWidth, height + 500);
+                
+                // Ventanas (pocas y apagadas o encendidas)
+                const windowsOn = seed > 0.5; // Este edificio tiene luz?
+                for (let wy = y + 20; wy < GAME_HEIGHT; wy += 40) {
+                    for (let wx = x + 20; wx < x + bWidth - 20; wx += 30) {
+                        let wSeed = Math.sin(wx * wy);
+                        ctx.fillStyle = '#111'; // Ventana apagada
+                        // Pocas ventanas prendidas
+                        if (windowsOn && wSeed > 0.7) {
+                            ctx.fillStyle = wSeed > 0.9 ? THEME.constructionOrange : '#556';
+                        }
+                        ctx.fillRect(wx, wy, 12, 25);
+                    }
+                }
+                // Scaffolding externo
+                if (seed < -0.5) {
+                    ctx.fillStyle = THEME.scaffoldMetal;
+                    for (let sy = y; sy < GAME_HEIGHT; sy+=50) {
+                        ctx.fillRect(x - 10, sy, bWidth + 20, 5);
+                        ctx.fillRect(x - 10 + (sy%100), sy, 5, 50); // Postes verticales
+                    }
+                }
+            }
+            else if (layer.type === 'pillars') {
+                // Pilares muy rápidos en frente desenfocados
+                if (seed > 0.6) {
+                    ctx.fillStyle = 'rgba(0,0,0,0.8)';
+                    ctx.fillRect(x, 0, 80, GAME_HEIGHT);
+                }
+            }
+            else if (layer.type === 'wires') {
+                // Cables curvos en primer plano
+                ctx.beginPath();
+                ctx.strokeStyle = 'rgba(0,0,0,0.9)';
+                ctx.lineWidth = 6;
+                ctx.moveTo(x - 200, 0);
+                ctx.bezierCurveTo(x, 300, x + 400, 300, x + spacing + 200, 0);
+                ctx.stroke();
+            }
+        }
+        ctx.restore();
+    }
+
+    function drawMap(ctx) {
+        platforms.forEach((p, idx) => {
+            // Sombra de la plataforma
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.fillRect(p.x + 10, p.y + 10, p.width, p.height);
+
+            // Cuerpo principal con textura
+            ctx.fillStyle = floorPattern;
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+            
+            // Borde superior iluminado
+            ctx.fillStyle = '#444';
+            ctx.fillRect(p.x, p.y, p.width, 5);
+            
+            // Franjas de peligro (Hazard Stripes) en los bordes
+            const stripeW = 20;
+            ctx.fillStyle = THEME.constructionYellow;
+            ctx.fillRect(p.x, p.y, p.width, 20); // Banda amarilla
+            
+            ctx.fillStyle = '#000';
+            for (let i = 0; i < p.width; i+=40) {
+                ctx.beginPath();
+                ctx.moveTo(p.x + i, p.y);
+                ctx.lineTo(p.x + i + 20, p.y);
+                ctx.lineTo(p.x + i, p.y + 20);
+                ctx.lineTo(p.x + i - 20, p.y + 20);
+                ctx.fill();
+            }
+
+            // Detalles decorativos específicos
+            if (idx === 1) { // Plataforma flotante
+                // Cables colgando por debajo
+                ctx.strokeStyle = '#222';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(p.x + 50, p.y + p.height);
+                ctx.lineTo(p.x + 50, p.y + p.height + 100);
+                ctx.stroke();
+                
+                // Generador de partículas (Vapor)
+                if (Math.random() > 0.9) {
+                    particles.push(new Particle(p.x + 50, p.y + 10, 'steam'));
+                }
+            } else {
+                // Suelo base
+                // Montones de escombros
+                ctx.fillStyle = '#151515';
+                ctx.beginPath();
+                ctx.moveTo(p.x + 300, p.y);
+                ctx.lineTo(p.x + 350, p.y - 30);
+                ctx.lineTo(p.x + 400, p.y);
+                ctx.fill();
+            }
+        });
+    }
+
+    // --- BUCLE PRINCIPAL ---
+    function loop() {
+        gameTime++;
+        
+        // Movimiento de cámara suave (scroll automático lento hacia la derecha)
+        camera.x += 1.5; 
+        
+        // Actualizar entidades
+        player.update();
+        walker.update();
+        flyer.update();
+        
+        // Generador ambiental de partículas
+        if (Math.random() > 0.8) {
+            particles.push(new Particle(camera.x + Math.random()*GAME_WIDTH, Math.random()*GAME_HEIGHT, 'dust'));
+        }
+        // Chispas aleatorias fuera de cámara
+        if (Math.random() > 0.95) {
+             let sparkX = camera.x + GAME_WIDTH + 50;
+             let sparkY = Math.random() * 500;
+             for(let k=0; k<5; k++) particles.push(new Particle(sparkX, sparkY, 'spark'));
+        }
+
+        // Renderizado
+        ctx.fillStyle = THEME.skyTop;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Gradiente cielo
+        let grad = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        grad.addColorStop(0, THEME.skyTop);
+        grad.addColorStop(1, THEME.skyBottom);
+        ctx.fillStyle = grad;
+        ctx.fillRect(0,0, GAME_WIDTH, GAME_HEIGHT);
+
+        // Dibujar Fondo (Capas 0-5)
+        bgLayers.forEach(layer => drawLayer(ctx, layer, camera.x, camera.y));
+        
+        // Dibujar Plataformas y Jugabilidad
+        // Ajustamos la vista para simular la cámara
+        ctx.save();
+        
+        // Como es un demo infinito, reseteamos la posición de las entidades para que no se pierdan
+        // pero dibujamos el mapa moviéndose.
+        
+        // Truco de renderizado para el demo:
+        // Queremos que el PJ parezca que avanza por el nivel infinito.
+        // La cámara avanza (camera.x aumenta).
+        // Las plataformas "fijas" se mueven a la izquierda.
+        // Pero el PJ se mueve localmente.
+        
+        // Para este canvas, dibujaremos todo relativo a la cámara.
+        let renderOffsetX = -camera.x % 2400; // Loop del mundo para que no se acabe el suelo visualmente
+        // HACK: Para que las plataformas se repitan infinitamente en este demo
+        // dibujaremos el mapa dos veces para cubrir el ciclo.
+        
+        ctx.translate(200, 0); // Margen izquierdo
+        
+        // Dibujar plataformas (Loop visual)
+        ctx.save();
+        ctx.translate(renderOffsetX, 0);
+        drawMap(ctx); 
+        ctx.translate(2400, 0); // Copia siguiente
+        drawMap(ctx);
+        ctx.restore();
+
+        // Entidades (Las mantenemos fijas en pantalla relativa para el demo, pero animadas)
+        // El jugador realmente se mueve con la cámara en un juego real, aquí lo fijamos visualmente
+        // y simulamos que el mundo pasa.
+        player.draw(ctx);
+        
+        // Enemigos flotando relativos al mundo (simple hack visual)
+        ctx.save();
+        ctx.translate(renderOffsetX, 0); 
+        // Dibujamos enemigos varias veces para que aparezcan siempre
+        walker.draw(ctx); 
+        flyer.draw(ctx);
+        ctx.translate(1200, 0); // Más enemigos adelante
+        walker.draw(ctx);
+        flyer.draw(ctx);
+        ctx.restore();
+
+        // Partículas (Globales)
+        particles.forEach((p, index) => {
+            p.update();
+            p.draw(ctx, 0, 0); // Se dibujan en pantalla (overlay) para efecto 3D
+            if (p.life <= 0) particles.splice(index, 1);
+        });
+
+        ctx.restore();
+
+        // Dibujar Foreground (Capas 6-7)
+        fgLayers.forEach(layer => drawLayer(ctx, layer, camera.x, camera.y));
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>

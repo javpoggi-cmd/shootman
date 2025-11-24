@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Nivel 2 - Sector Profundo (Construction)</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050505;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 40px rgba(0, 0, 0, 0.9);
+            border: 4px solid #333;
+            background: #000;
+            width: 1280px; 
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            background-color: #0f1210;
+            image-rendering: pixelated;
+            width: 100%;
+            height: 100%;
+        }
+        #scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.15) 50%), 
+                        linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 4px, 6px 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+        #atmosphere-overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle at 50% 30%, rgba(20, 30, 25, 0) 40%, rgba(0, 0, 0, 0.5) 90%);
+            pointer-events: none;
+            z-index: 11;
+        }
+        #debug-ui {
+            position: absolute; top: 10px; left: 10px; color: #00ffaa; z-index: 20;
+            background: rgba(0,0,0,0.8); padding: 10px; border: 1px solid #333;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="testCanvas"></canvas>
+    <div id="scanlines"></div>
+    <div id="atmosphere-overlay"></div>
+    <div id="debug-ui">
+        <h3>NIVEL 2: SECTOR EN CONSTRUCCIÓN</h3>
+        <p>Detalle: Grúas y Andamios</p>
+        <p>Luces: Estáticas/Lentas</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- COLORES ---
+    const COLORS = { 
+        player: '#e0e0e0', 
+        playerAccent: '#ffaa00', 
+    };
+    
+    const currentBiome = { 
+        name: "INDUSTRIAL_DEEP", 
+        sky: '#050505', 
+        layers: ['#080808', '#0a0a0a', '#111111', '#161616', '#1a1a1a', '#222222'], 
+        ground: '#2a332e', 
+        groundDark: '#1e2420', 
+        top: '#4a5e52',
+        hazardYellow: '#aa8800'
+    };
+    
+    const ENEMY_COLOR = '#cc4444';
+
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+    
+    function randomInt(min, max) { return Math.floor(Math.random() * (max - min + 1) + min); }
+
+    // --- MOCKS (Personajes intactos) ---
+    class MockPlayer {
+        constructor(x, y) { this.x = x; this.y = y; this.width = 24; this.height = 40; this.vx = 0; this.animTimer = 0; this.facingRight = true; this.state = 'wait'; this.stateTimer = 0; }
+        update() {
+            this.animTimer++; this.stateTimer++;
+            if (this.state === 'wait') { this.vx = 0; if (this.stateTimer > 60) { this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left'; this.stateTimer = 0; } }
+            else if (this.state === 'walk_right') { this.vx = 3; this.facingRight = true; this.x += this.vx; if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; } }
+            else if (this.state === 'walk_left') { this.vx = -3; this.facingRight = false; this.x += this.vx; if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; } }
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; } if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+        }
+        draw(ctx) {
+            ctx.save(); ctx.fillStyle = COLORS.player;
+            let lean = 0; if (Math.abs(this.vx) > 1) lean = this.facingRight ? 3 : -3; ctx.translate(lean, 0);
+            if (Math.abs(this.vx) > 0.5) { let cycle = Math.sin(this.animTimer * 0.5); ctx.fillRect(this.x + 4, this.y + 25, 6, 15 + cycle * 3); ctx.fillRect(this.x + 14, this.y + 25, 6, 15 - cycle * 3); } 
+            else { ctx.fillRect(this.x + 4, this.y + 25, 6, 15); ctx.fillRect(this.x + 14, this.y + 25, 6, 15); }
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x, this.y + 10, this.width, 18);
+            ctx.fillStyle = '#55f'; ctx.fillRect(this.facingRight ? this.x - 4 : this.x + 20, this.y + 12, 4, 10); 
+            ctx.fillStyle = '#333'; ctx.fillRect(this.x + 2, this.y, 20, 12);
+            ctx.fillStyle = '#ffaa00'; ctx.fillRect(this.facingRight ? this.x + 12 : this.x + 2, this.y + 3, 10, 4);
+            ctx.fillStyle = '#555'; ctx.fillRect(this.facingRight ? this.x + 14 : this.x - 6, this.y + 14, 16, 6);
+            ctx.restore();
+        }
+    }
+    class MockWalker {
+        constructor(x, y) { this.x = x; this.y = y; this.width = 30; this.height = 30; this.vx = 2; this.dir = 1; this.timer = 0; this.state = 'walk'; this.startX = x; }
+        update() {
+            this.timer++;
+            if (this.state === 'walk') { this.x += this.vx; if (Math.abs(this.x - this.startX) > 150) { this.state = 'wait'; this.waitTimer = 60; } } 
+            else if (this.state === 'wait') { this.waitTimer--; if (this.waitTimer <= 0) { this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk'; } }
+        }
+        draw(ctx) {
+            ctx.fillStyle = ENEMY_COLOR; let anim = Math.sin(this.timer * 0.2); let drawY = this.y - 10; 
+            ctx.fillRect(this.x, drawY, this.width, this.height);
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x + 10, drawY + 5, 10, 10); ctx.fillStyle = '#f00'; ctx.fillRect(this.x + 13, drawY + 8, 4, 4);
+            ctx.fillStyle = ENEMY_COLOR; 
+            ctx.save(); ctx.translate(this.x + 5, drawY + 15); ctx.rotate(anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.save(); ctx.translate(this.x + 25, drawY + 15); ctx.rotate(-anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.fillRect(this.x + 5, drawY + 30, 5, 10 + anim * 5); ctx.fillRect(this.x + 20, drawY + 30, 5, 10 - anim * 5);
+        }
+    }
+    class MockFlyer {
+        constructor(x, y) { this.x = x; this.y = y; this.width = 30; this.height = 20; this.startX = x; this.timer = 0; }
+        update() { this.timer++; this.x = this.startX + Math.sin(this.timer * 0.02) * 200; this.y += Math.cos(this.timer * 0.05) * 1; }
+        draw(ctx) {
+            let flap = Math.sin(this.timer * 0.8) * 10;
+            ctx.fillStyle = ENEMY_COLOR; ctx.fillRect(this.x, this.y, 30, 20); ctx.fillStyle = '#777'; 
+            ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(this.x - 10, this.y - 10 + flap); ctx.lineTo(this.x + 10, this.y); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(this.x + 30, this.y); ctx.lineTo(this.x + 40, this.y - 10 + flap); ctx.lineTo(this.x + 20, this.y); ctx.fill(); 
+            ctx.fillStyle = '#ff0'; ctx.fillRect(this.x + 10, this.y + 5, 10, 5);
+        }
+    }
+
+    // --- PARTÍCULAS ---
+    class ParticleSystem {
+        constructor() { this.particles = []; }
+        spawn(x, y, type) { this.particles.push({ x: x, y: y, vx: (Math.random() - 0.5) * 2, vy: (Math.random() * 2) - 1, life: 1.0, type: type, size: Math.random() * 3 + 1 }); }
+        updateAndDraw(ctx) {
+            for(let i=this.particles.length-1; i>=0; i--) {
+                let p = this.particles[i];
+                p.x += p.vx; p.y += p.vy; p.life -= 0.01;
+                if (p.type === 'smoke') { p.y -= 0.5; p.size += 0.1; ctx.fillStyle = `rgba(50, 50, 50, ${p.life * 0.4})`; } 
+                else { p.y += 0.5; ctx.fillStyle = `rgba(150, 160, 150, ${p.life * 0.5})`; }
+                ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, Math.PI*2); ctx.fill();
+                if(p.life <= 0) this.particles.splice(i, 1);
+            }
+        }
+    }
+    const particles = new ParticleSystem();
+
+    // --- GENERACIÓN DE FONDO MEJORADA ---
+    
+    function generateLayerData(count, widthMin, widthMax, heightBase, heightVar, color, layerIndex) {
+        let items = [];
+        let structures = []; // Grúas, andamios
+        let currentX = -200;
+        
+        for(let i=0; i<count; i++) {
+            let w = randomInt(widthMin, widthMax);
+            let h = heightBase + randomInt(0, heightVar);
+            let gap = randomInt(10, 80); // Huecos más variados para poner estructuras
+
+            // LOGICA DE LUCES (Corregida)
+            // Solo el 10% de las ventanas serán "activas" (pueden prenderse)
+            // El resto siempre están apagadas.
+            let windows = [];
+            let hasWindows = Math.random() > 0.2; 
+            
+            if (hasWindows) {
+                let winRows = Math.floor(h / 40);
+                let winCols = Math.floor(w / 30);
+                for(let r=0; r<winRows; r++) {
+                    for(let c=0; c<winCols; c++) {
+                        if ((c + r) % 3 === 0) continue; 
+                        
+                        let canLightUp = Math.random() < 0.10; // Solo 10% pueden prenderse
+                        
+                        if (canLightUp) {
+                            windows.push({ 
+                                x: c*25 + 10, 
+                                y: r*35 + 20, 
+                                // Fase aleatoria, velocidad MUY lenta
+                                phase: Math.random() * 100, 
+                                speed: 0.0005 // Ciclos de minutos
+                            });
+                        }
+                    }
+                }
+            }
+            
+            // OBJETOS EN TEJADOS (Rejas, Antenas)
+            let roofDetails = [];
+            let roofType = Math.random();
+            if (roofType < 0.4) {
+                // Reja de seguridad
+                roofDetails.push({ type: 'fence', x: 0, w: w, h: 10 });
+            } else if (roofType < 0.7) {
+                // Antena grande
+                roofDetails.push({ type: 'antenna', x: randomInt(10, w-10), w: 4, h: randomInt(20, 60) });
+            } else {
+                // Cajas de ventilación
+                roofDetails.push({ type: 'box', x: randomInt(10, w-30), w: randomInt(10, 30), h: 15 });
+            }
+
+            // ESTRUCTURAS ENTRE EDIFICIOS (Grúas, Andamios)
+            // Si el hueco es grande, meter algo
+            if (gap > 40 && layerIndex < 5) { // No en la capa más cercana para no tapar juego
+                let structX = currentX + w + (gap/2);
+                let structType = Math.random();
+                
+                if (structType < 0.4) {
+                    // Grúa
+                    structures.push({ 
+                        type: 'crane', 
+                        x: structX, 
+                        h: h + 100, // Sobresale del edificio
+                        armLen: randomInt(50, 100),
+                        facingLeft: Math.random() > 0.5
+                    });
+                } else if (structType < 0.7) {
+                    // Andamio conectando
+                    structures.push({
+                        type: 'scaffold',
+                        x: currentX + w,
+                        w: gap,
+                        h: h - 50
+                    });
+                }
+            }
+
+            items.push({ x: currentX, w: w, h: h, wins: windows, roof: roofDetails });
+            currentX += w + gap;
+        }
+        return { items, structures, totalWidth: currentX, color };
+    }
+
+    const bgLayers = [
+        { speed: 0.02, data: generateLayerData(15, 200, 500, 400, 200, currentBiome.layers[0], 0), yOffset: 150 },
+        { speed: 0.05, data: generateLayerData(20, 150, 300, 300, 150, currentBiome.layers[1], 1), yOffset: 100 },
+        { speed: 0.10, data: generateLayerData(25, 100, 250, 250, 150, currentBiome.layers[2], 2), yOffset: 80 },
+        { speed: 0.20, data: generateLayerData(30, 80, 200, 200, 150, currentBiome.layers[3], 3), yOffset: 50 },
+        { speed: 0.40, data: generateLayerData(30, 60, 180, 150, 100, currentBiome.layers[4], 4), yOffset: 20 },
+        { speed: 0.60, data: generateLayerData(35, 50, 150, 100, 100, currentBiome.layers[5], 5), yOffset: 0 }
+    ];
+
+    // --- FOREGROUND (Azoteas Silueteadas) ---
+    function generateRooftops(width) {
+        let rooftops = [];
+        let cx = 0;
+        while(cx < width) {
+            let w = randomInt(100, 300);
+            let h = randomInt(50, 120); 
+            let details = [];
+            // Rejas en foreground
+            for(let k=0; k<w; k+=10) {
+                details.push({ x: k, h: 10 }); // Palos de reja
+            }
+            rooftops.push({ x: cx, w: w, h: h, details: details });
+            cx += w + randomInt(0, 50); 
+        }
+        return { items: rooftops, totalW: cx };
+    }
+
+    const fgData = {
+        layer1: generateRooftops(2500), 
+        layer2: generateRooftops(2500)
+    };
+
+    // --- OBJETOS DE JUEGO ---
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450);
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200, props: [] }, 
+        { x: 750, y: 490, width: 400, height: 20, props: [] }
+    ];
+
+    platforms.forEach(p => {
+        let numProps = Math.floor(p.width / 150);
+        for(let i=0; i<numProps; i++) {
+            let px = randomInt(20, p.width - 40);
+            let type = Math.random();
+            if (type < 0.3) p.props.push({ type: 'crate', x: px, w: 20, h: 20 });
+            else if (type < 0.6) p.props.push({ type: 'barrel', x: px, w: 14, h: 24 });
+            else p.props.push({ type: 'terminal', x: px, w: 15, h: 25 });
+        }
+    });
+
+    // --- DIBUJO ---
+    function drawBackground(ctx, camX) {
+        ctx.fillStyle = currentBiome.sky;
+        ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+        let grad = ctx.createLinearGradient(0, GAME_HEIGHT - 300, 0, GAME_HEIGHT);
+        grad.addColorStop(0, currentBiome.sky);
+        grad.addColorStop(1, '#1a221e'); 
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+        bgLayers.forEach(layer => {
+            let parallaxX = -(camX * layer.speed);
+            let totalW = layer.data.totalWidth;
+            
+            ctx.save();
+            ctx.translate(parallaxX % totalW, 0);
+            
+            for(let k=0; k<2; k++) {
+                let xOff = k * totalW;
+                if (parallaxX + xOff > GAME_WIDTH || parallaxX + xOff + totalW < 0) continue;
+
+                ctx.translate(xOff, 0);
+                ctx.fillStyle = layer.data.color;
+                
+                // DIBUJAR ESTRUCTURAS DE FONDO (Grúas/Andamios) PRIMERO
+                layer.data.structures.forEach(s => {
+                    let baseY = GAME_HEIGHT - layer.yOffset;
+                    
+                    if (s.type === 'crane') {
+                        // Torre grúa
+                        ctx.fillRect(s.x - 2, baseY - s.h, 4, s.h + 100);
+                        // Brazo
+                        let armStart = s.facingLeft ? s.x - s.armLen : s.x;
+                        let armEnd = s.facingLeft ? s.x : s.x + s.armLen;
+                        ctx.fillRect(armStart, baseY - s.h, s.armLen, 3);
+                        // Cable colgando
+                        ctx.beginPath();
+                        ctx.moveTo(s.facingLeft ? armStart + 5 : armEnd - 5, baseY - s.h);
+                        ctx.lineTo(s.facingLeft ? armStart + 5 : armEnd - 5, baseY - s.h + 40);
+                        ctx.strokeStyle = layer.data.color;
+                        ctx.lineWidth = 1;
+                        ctx.stroke();
+                        // Gancho/Peso
+                        ctx.fillRect((s.facingLeft ? armStart + 3 : armEnd - 7), baseY - s.h + 40, 5, 8);
+                    } else if (s.type === 'scaffold') {
+                        // Andamio (Grid)
+                        ctx.globalAlpha = 0.5;
+                        for(let sy = 0; sy < s.h; sy += 20) {
+                            ctx.fillRect(s.x, baseY - sy, s.w, 2); // Horizontal
+                            // Cruces
+                            ctx.beginPath();
+                            ctx.moveTo(s.x, baseY - sy);
+                            ctx.lineTo(s.x + s.w, baseY - sy - 20);
+                            ctx.moveTo(s.x + s.w, baseY - sy);
+                            ctx.lineTo(s.x, baseY - sy - 20);
+                            ctx.stroke();
+                        }
+                        ctx.globalAlpha = 1.0;
+                    }
+                });
+
+                // DIBUJAR EDIFICIOS
+                layer.data.items.forEach(b => {
+                    let yPos = GAME_HEIGHT - b.h - layer.yOffset;
+                    ctx.fillRect(b.x, yPos, b.w, b.h + 500);
+                    
+                    // TEJADOS
+                    b.roof.forEach(r => {
+                        if (r.type === 'antenna') {
+                            ctx.fillRect(b.x + r.x, yPos - r.h, r.w, r.h);
+                            // Luz roja muuy lenta
+                            if (Math.sin(Date.now() * 0.002) > 0.0) {
+                                ctx.fillStyle = '#aa0000'; ctx.fillRect(b.x + r.x-1, yPos - r.h - 2, 6, 6); ctx.fillStyle = layer.data.color;
+                            }
+                        } else if (r.type === 'fence') {
+                            // Cerca de seguridad en tejado
+                            for(let fx = 0; fx < r.w; fx+=8) ctx.fillRect(b.x + fx, yPos - 8, 2, 8);
+                            ctx.fillRect(b.x, yPos - 8, r.w, 2);
+                        } else { 
+                            ctx.fillRect(b.x + r.x, yPos - 10, r.w, 10); 
+                        }
+                    });
+
+                    // VENTANAS REALISTAS (POCAS)
+                    if (layer.speed > 0.05) {
+                        b.wins.forEach(w => {
+                            // Sinusoidal muy lenta
+                            let time = Date.now();
+                            let state = Math.sin(time * w.speed + w.phase);
+                            
+                            // Solo se enciende si el ciclo está muy alto (picos raros)
+                            if (state > 0.95) { 
+                                ctx.fillStyle = '#ffeb3b'; // Luz cálida encendida
+                                ctx.fillRect(b.x + w.x, yPos + w.y, 6, 12);
+                            } 
+                            // El resto del tiempo permanece oscura (no dibujamos nada sobre el edificio negro)
+                        });
+                        ctx.fillStyle = layer.data.color;
+                    }
+                });
+                ctx.translate(-xOff, 0);
+            }
+            ctx.restore();
+        });
+    }
+
+    function drawDetailedMap(ctx) {
+        platforms.forEach(p => {
+            ctx.fillStyle = currentBiome.ground; ctx.fillRect(p.x, p.y, p.width, p.height);
+            ctx.fillStyle = currentBiome.groundDark;
+            for(let i=0; i<p.width; i+=64) {
+                ctx.fillRect(p.x + i, p.y, 2, p.height);
+                ctx.fillStyle = '#111'; ctx.fillRect(p.x + i + 4, p.y + 15, 4, 4); ctx.fillRect(p.x + i + 56, p.y + 15, 4, 4);
+                ctx.fillStyle = currentBiome.groundDark;
+            }
+            ctx.fillStyle = currentBiome.top; ctx.fillRect(p.x, p.y, p.width, 10);
+            ctx.fillStyle = currentBiome.hazardYellow;
+            for(let i=0; i<p.width; i+=20) {
+                ctx.beginPath(); ctx.moveTo(p.x + i, p.y + 10); ctx.lineTo(p.x + i + 10, p.y + 10); ctx.lineTo(p.x + i, p.y + 15); ctx.fill();
+            }
+
+            p.props.forEach(prop => {
+                let py = p.y - prop.h; let px = p.x + prop.x;
+                if (prop.type === 'crate') {
+                    ctx.fillStyle = '#5a4a3a'; ctx.fillRect(px, py, prop.w, prop.h);
+                    ctx.fillStyle = '#3a2a1a'; ctx.fillRect(px + 2, py + 2, prop.w - 4, prop.h - 4);
+                    ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px+prop.w, py+prop.h); ctx.strokeStyle='#2a1a0a'; ctx.stroke();
+                } else if (prop.type === 'barrel') {
+                    ctx.fillStyle = '#445544'; ctx.fillRect(px, py, prop.w, prop.h);
+                    ctx.fillStyle = '#223322'; ctx.fillRect(px, py + 5, prop.w, 2); ctx.fillRect(px, py + 15, prop.w, 2);
+                    ctx.fillStyle = '#ccff00'; ctx.fillRect(px + 4, py + 8, 4, 4);
+                } else if (prop.type === 'terminal') {
+                    ctx.fillStyle = '#222'; ctx.fillRect(px, py, prop.w, prop.h);
+                    ctx.fillStyle = '#0f0'; ctx.fillRect(px + 2, py + 2, 8, 6);
+                    if (Math.floor(Date.now() / 1000) % 2 === 0) ctx.fillStyle = '#f00'; else ctx.fillStyle = '#500';
+                    ctx.fillRect(px + 10, py + 15, 2, 2);
+                }
+            });
+
+            if (p.height < 50) {
+                ctx.fillStyle = '#151515'; ctx.fillRect(p.x + 20, p.y + p.height, p.width - 40, 10);
+                for(let i=40; i<p.width-40; i+=40) ctx.fillRect(p.x + i, p.y + p.height, 5, 15);
+            } else {
+                ctx.fillStyle = '#1a1a1a'; ctx.fillRect(p.x + 100, p.y + 50, 200, 10);
+                ctx.fillStyle = '#111'; ctx.fillRect(p.x + 150, p.y + 40, 20, 30);
+            }
+        });
+    }
+
+    function drawRooftopsLayer(ctx, data, speed, camX, yBase, color) {
+        let px = -(camX * speed);
+        ctx.fillStyle = color;
+        ctx.save();
+        ctx.translate(px % data.totalW, 0);
+        
+        for(let k=0; k<2; k++) { 
+            let offset = k * data.totalW;
+            ctx.translate(offset, 0);
+            data.items.forEach(r => {
+                let ry = yBase - r.h;
+                ctx.fillRect(r.x, ry, r.w, r.h + 100);
+                // Rejas foreground
+                r.details.forEach(d => {
+                    ctx.fillRect(r.x + d.x, ry - d.h, 4, d.h);
+                });
+            });
+            ctx.translate(-offset, 0);
+        }
+        ctx.restore();
+    }
+
+    function drawForeground(ctx, camX) {
+        drawRooftopsLayer(ctx, fgData.layer1, 1.2, camX, GAME_HEIGHT + 20, '#050505');
+        drawRooftopsLayer(ctx, fgData.layer2, 1.5, camX, GAME_HEIGHT + 50, '#000000');
+        let grad = ctx.createLinearGradient(0, GAME_HEIGHT - 80, 0, GAME_HEIGHT);
+        grad.addColorStop(0, 'rgba(0,0,0,0)');
+        grad.addColorStop(1, 'rgba(0,0,0,0.9)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, GAME_HEIGHT - 80, GAME_WIDTH, 80);
+    }
+
+    function loop() {
+        gameTime++;
+        camera.x = Math.sin(gameTime * 0.01) * 300 + 100;
+        player.update(); walker.update(); flyer.update();
+        if(Math.random() > 0.8) particles.spawn(Math.random()*GAME_WIDTH, Math.random()*GAME_HEIGHT, 'dust');
+        if(Math.random() > 0.9) particles.spawn(Math.random()*GAME_WIDTH, GAME_HEIGHT, 'smoke');
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        drawBackground(ctx, camera.x);
+        
+        ctx.save();
+        ctx.translate(-camera.x + 200, 0); 
+        drawDetailedMap(ctx);
+        player.draw(ctx); walker.draw(ctx); flyer.draw(ctx);
+        particles.updateAndDraw(ctx);
+        ctx.restore();
+
+        drawForeground(ctx, camera.x);
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>

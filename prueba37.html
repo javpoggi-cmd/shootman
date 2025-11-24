@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shootman: Magma Foundry Level</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #1a0505;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 60px rgba(255, 60, 0, 0.2); /* Resplandor de calor */
+            border: 4px solid #331111;
+            background: #000;
+            width: 100%;
+            max-width: 1280px;
+            aspect-ratio: 16/9;
+        }
+        canvas {
+            display: block;
+            background-color: #100505;
+            image-rendering: pixelated;
+            width: 100%;
+            height: 100%;
+        }
+        #scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: 
+                radial-gradient(circle, rgba(255,100,0,0.1) 0%, rgba(0,0,0,0.8) 100%), /* Viñeta cálida */
+                linear-gradient(rgba(0, 0, 0, 0.1) 50%, rgba(0, 0, 0, 0.3) 50%); /* Scanlines clásicas */
+            background-size: 100% 100%, 100% 4px;
+            pointer-events: none;
+            z-index: 100;
+            mix-blend-mode: multiply;
+        }
+        /* Capa extra para simular calor/brillo */
+        #heat-glow {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(0deg, rgba(255, 50, 0, 0.15) 0%, rgba(0,0,0,0) 40%);
+            pointer-events: none;
+            z-index: 90;
+            mix-blend-mode: screen;
+        }
+        #debug-ui {
+            position: absolute; top: 10px; left: 10px; color: #ffaa55; z-index: 120;
+            background: rgba(30, 5, 0, 0.85); 
+            border: 1px solid #ff5500;
+            padding: 15px;
+            font-size: 14px;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="testCanvas"></canvas>
+    <div id="heat-glow"></div>
+    <div id="scanlines"></div>
+    <div id="debug-ui">
+        <h3>SISTEMA DE DISEÑO</h3>
+        <p>Bioma: FUNDICIÓN MAGMA</p>
+        <p>Temperatura: 1200°C</p>
+        <p>Capas Render: 8</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- PALETA DE COLORES VOLCÁNICA ---
+    const COLORS = { 
+        player: '#cfcfcf', // Ligeramente más oscuro por el humo
+        playerAccent: '#ffaa00', // Mantenido
+        
+        // Colores del nivel
+        magmaBg: '#150505',
+        lavaBright: '#ffcc00',
+        lavaMid: '#ff4400',
+        lavaDark: '#aa1100',
+        
+        rockDark: '#1a1010',
+        rockMid: '#332222',
+        metalRusty: '#553333',
+        metalDark: '#221111'
+    };
+    
+    const ENEMY_COLOR = '#cc4444'; 
+
+    // --- VARIABLES DE SIMULACIÓN ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+    
+    // --- SISTEMA DE PARTÍCULAS (Ceniza y Brasas) ---
+    const particles = [];
+
+    class Particle {
+        constructor(x, y, type) {
+            this.x = x; this.y = y;
+            this.type = type; // 'ember', 'ash', 'smoke'
+            this.life = 1.0;
+            
+            if (type === 'ember') {
+                // Brasas suben rápido
+                this.vx = (Math.random() - 0.5) * 2;
+                this.vy = -Math.random() * 3 - 1; 
+                this.decay = Math.random() * 0.02 + 0.01;
+                this.color = '#ffff00';
+                this.size = Math.random() * 3;
+            } else if (type === 'ash') {
+                // Ceniza flota lento
+                this.vx = (Math.random() - 0.5) * 1;
+                this.vy = Math.random() * 1 + 0.5; // Cae lento
+                this.decay = 0.003;
+                this.color = '#887777';
+                this.size = Math.random() * 2 + 1;
+            } else if (type === 'smoke') {
+                this.vx = -1; // Viento constante
+                this.vy = -0.5;
+                this.decay = 0.005;
+                this.color = `rgba(50, 40, 40, ${Math.random()*0.5})`;
+                this.size = Math.random() * 20 + 10;
+                this.isSmoke = true;
+            }
+        }
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            this.life -= this.decay;
+            
+            // Movimiento errático para ceniza
+            if (this.type === 'ash') {
+                this.x += Math.sin(gameTime * 0.05 + this.y * 0.1) * 0.5;
+            }
+        }
+        draw(ctx) {
+            if (this.life <= 0) return;
+            if (this.isSmoke) {
+                 ctx.fillStyle = this.color;
+                 ctx.beginPath();
+                 ctx.arc(this.x, this.y, this.size, 0, Math.PI*2);
+                 ctx.fill();
+            } else {
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = this.type === 'ember' ? 
+                    (this.life > 0.5 ? '#ffff00' : '#ff4400') : this.color;
+                ctx.fillRect(this.x, this.y, this.size, this.size);
+                ctx.globalAlpha = 1.0;
+            }
+        }
+    }
+
+    function spawnParticles() {
+        // Brasas desde abajo (lava)
+        if (Math.random() < 0.4) {
+            particles.push(new Particle(Math.random() * GAME_WIDTH, GAME_HEIGHT + 10, 'ember'));
+        }
+        // Ceniza cayendo desde arriba
+        if (Math.random() < 0.2) {
+            particles.push(new Particle(Math.random() * GAME_WIDTH, -10, 'ash'));
+        }
+        // Humo de fondo
+        if (Math.random() < 0.05) {
+             particles.push(new Particle(GAME_WIDTH + 50, Math.random() * GAME_HEIGHT, 'smoke'));
+        }
+    }
+
+    // --- CLASES DE ENTIDADES (SIN CAMBIOS) ---
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 24; this.height = 40;
+            this.vx = 0; this.animTimer = 0; this.facingRight = true; this.state = 'wait'; this.stateTimer = 0;
+        }
+        update() {
+            this.animTimer++; this.stateTimer++;
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3; this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3; this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+        }
+        draw(ctx) {
+            ctx.save(); 
+            ctx.translate(Math.round(this.x), Math.round(this.y));
+            
+            // Reflejo rojo en el jugador por la lava
+            ctx.shadowColor = '#ff4400'; ctx.shadowBlur = 0;
+            
+            let lean = 0; if (Math.abs(this.vx) > 1) lean = this.facingRight ? 3 : -3; 
+            ctx.translate(lean, 0);
+            
+            ctx.fillStyle = COLORS.player;
+            if (Math.abs(this.vx) > 0.5) {
+                let cycle = Math.sin(this.animTimer * 0.5);
+                ctx.fillRect(4, 25, 6, 15 + cycle * 3); ctx.fillRect(14, 25, 6, 15 - cycle * 3);
+            } else { 
+                ctx.fillRect(4, 25, 6, 15); ctx.fillRect(14, 25, 6, 15); 
+            }
+            ctx.fillStyle = '#fff'; ctx.fillRect(0, 10, this.width, 18);
+            ctx.fillStyle = '#55f'; ctx.fillRect(this.facingRight ? -4 : 20, 12, 4, 10);
+            ctx.fillStyle = '#333'; ctx.fillRect(2, 0, 20, 12);
+            ctx.fillStyle = COLORS.playerAccent; ctx.fillRect(this.facingRight ? 12 : 2, 3, 10, 4);
+            ctx.fillStyle = '#555';
+            let gunX = this.facingRight ? 14 : -6; 
+            ctx.fillRect(gunX, 14, 16, 6);
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 30; this.height = 30; this.vx = 2; this.dir = 1; this.timer = 0; this.state = 'walk'; this.startX = x;
+        }
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) { this.state = 'wait'; this.waitTimer = 60; }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) { this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk'; }
+            }
+        }
+        draw(ctx) {
+            ctx.save();
+            ctx.translate(this.x, this.y - 10);
+            ctx.fillStyle = ENEMY_COLOR;
+            let anim = Math.sin(this.timer * 0.2);
+            ctx.fillRect(0, 0, this.width, this.height);
+            ctx.fillStyle = '#fff'; ctx.fillRect(10, 5, 10, 10); ctx.fillStyle = '#f00'; ctx.fillRect(13, 8, 4, 4);
+            ctx.fillStyle = ENEMY_COLOR; 
+            ctx.save(); ctx.translate(5, 15); ctx.rotate(anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.save(); ctx.translate(25, 15); ctx.rotate(-anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.fillRect(5, 30, 5, 10 + anim * 5); ctx.fillRect(20, 30, 5, 10 - anim * 5);
+            ctx.restore();
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 30; this.height = 20; this.startX = x; this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1; 
+        }
+        draw(ctx) {
+            let flap = Math.sin(this.timer * 0.8) * 10;
+            ctx.save(); ctx.translate(this.x, this.y);
+            ctx.fillStyle = ENEMY_COLOR;
+            ctx.fillRect(0, 0, 30, 20); 
+            ctx.fillStyle = '#777'; 
+            ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-10, -10 + flap); ctx.lineTo(10, 0); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(30, 0); ctx.lineTo(40, -10 + flap); ctx.lineTo(20, 0); ctx.fill(); 
+            ctx.fillStyle = '#ff0'; ctx.fillRect(10, 5, 10, 5);
+            ctx.restore();
+        }
+    }
+
+    // --- INSTANCIAS ---
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450);
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200 },
+        { x: 750, y: 490, width: 400, height: 20 }
+    ];
+
+    // --- DIBUJADO DE FONDO DE MAGMA (5 CAPAS) ---
+    // Capa 1: Fondo cavernoso oscuro y flujos de lava lejanos
+    // Capa 2: Formaciones rocosas lejanas
+    // Capa 3: Maquinaria de bombeo industrial (siluetas)
+    // Capa 4: Cadenas gigantes y engranajes
+    // Capa 5: Paredes de la fábrica y detalles cercanos
+
+    function drawMagmaBackground(ctx, camX, camY) {
+        
+        // --- CAPA 0: FONDO CAVERNA ---
+        let bgGrad = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        bgGrad.addColorStop(0, '#100500');
+        bgGrad.addColorStop(1, '#330a00'); // Resplandor abajo
+        ctx.fillStyle = bgGrad;
+        ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+        // --- CAPA 1: CASCADAS DE LAVA LEJANAS ---
+        ctx.save();
+        ctx.translate(-camX * 0.05, -camY * 0.05);
+        
+        // Lava fluyendo
+        let flowOffset = (gameTime * 0.5) % 100;
+        ctx.fillStyle = COLORS.lavaDark;
+        for(let i=0; i<3; i++) {
+            let lx = i * 500 + 200;
+            ctx.fillRect(lx, 0, 40, GAME_HEIGHT);
+            
+            // "Chunks" de lava más brillante bajando
+            ctx.fillStyle = COLORS.lavaMid;
+            for(let j=0; j<10; j++) {
+                let ly = (j * 100 + flowOffset) % GAME_HEIGHT;
+                ctx.fillRect(lx + 5, ly, 30, 20 + Math.random()*10);
+            }
+            ctx.fillStyle = COLORS.lavaDark;
+        }
+        ctx.restore();
+
+        // --- CAPA 2: SILUETAS ROCOSAS ---
+        ctx.save();
+        ctx.translate(-camX * 0.1, -camY * 0.1);
+        ctx.fillStyle = '#0a0505';
+        ctx.beginPath();
+        ctx.moveTo(-100, GAME_HEIGHT);
+        for(let i=0; i<=20; i++) {
+            let rx = i * 100 - 100;
+            let noise = Math.sin(i * 1.5) * 50 + Math.cos(i * 0.5) * 100;
+            ctx.lineTo(rx, 400 + noise);
+        }
+        ctx.lineTo(GAME_WIDTH + 100, GAME_HEIGHT);
+        ctx.fill();
+        ctx.restore();
+
+        // --- CAPA 3: TUBERÍAS Y HORNOS (Industrial) ---
+        ctx.save();
+        ctx.translate(-camX * 0.25, -camY * 0.25);
+        ctx.fillStyle = COLORS.rockMid;
+        for(let i=0; i<5; i++) {
+            let px = i * 400;
+            // Tubería grande
+            ctx.fillRect(px, 100, 60, GAME_HEIGHT);
+            // Detalles tubería
+            ctx.fillStyle = '#110505';
+            ctx.fillRect(px + 10, 100, 40, GAME_HEIGHT);
+            // Juntas
+            ctx.fillStyle = '#442211';
+            ctx.fillRect(px - 10, 300, 80, 20);
+            ctx.fillRect(px - 10, 500, 80, 20);
+            ctx.fillStyle = COLORS.rockMid;
+        }
+        ctx.restore();
+
+        // --- CAPA 4: CADENAS Y ENGRANAJES COLGANTES ---
+        ctx.save();
+        ctx.translate(-camX * 0.5, -camY * 0.5);
+        ctx.fillStyle = '#221111';
+        for(let i=0; i<8; i++) {
+            let cx = i * 300 + 50;
+            // Cadena (dibujada simple como línea punteada gruesa)
+            ctx.beginPath();
+            ctx.setLineDash([15, 10]);
+            ctx.lineWidth = 8;
+            ctx.strokeStyle = '#221111';
+            ctx.moveTo(cx, -100);
+            ctx.lineTo(cx, 400 + Math.sin(gameTime * 0.02 + i)*20); // Oscilación suave
+            ctx.stroke();
+            ctx.setLineDash([]);
+            
+            // Gancho o peso al final
+            let endY = 400 + Math.sin(gameTime * 0.02 + i)*20;
+            ctx.fillRect(cx - 15, endY, 30, 40);
+        }
+        ctx.restore();
+
+        // --- CAPA 5: ESTRUCTURA CERCANA (Paredes detalladas) ---
+        ctx.save();
+        ctx.translate(-camX * 0.8, -camY * 0.8);
+        ctx.fillStyle = '#1a0d0d';
+        let tileSize = 400;
+        let startP = Math.floor((-camX * 0.8) / tileSize) - 1;
+        let endP = startP + 5;
+        
+        for(let i = startP; i < endP; i++) {
+            let bx = i * tileSize;
+            // Columnas gruesas
+            ctx.fillRect(bx, 0, 50, GAME_HEIGHT);
+            
+            // Rejillas de ventilación con brillo de fondo
+            ctx.fillStyle = '#331100'; // Fondo rejilla
+            ctx.fillRect(bx + 10, 500, 30, 100);
+            
+            // Brillo intermitente de la rejilla
+            if (Math.sin(gameTime * 0.1 + i) > 0) {
+                ctx.fillStyle = '#ffaa00';
+                ctx.globalAlpha = 0.3;
+                ctx.fillRect(bx + 10, 500, 30, 100);
+                ctx.globalAlpha = 1.0;
+            }
+            
+            ctx.fillStyle = '#1a0d0d'; // Reset
+        }
+        ctx.restore();
+    }
+
+    // --- DIBUJADO DE PLATAFORMAS INDUSTRIALES ---
+    function drawFoundryPlatforms(ctx) {
+        platforms.forEach(p => {
+            ctx.save();
+            ctx.translate(p.x, p.y);
+            
+            // 1. Cuerpo de metal oxidado
+            ctx.fillStyle = '#2b1d1d';
+            ctx.fillRect(0, 0, p.width, p.height);
+            
+            // 2. Textura de metal remachado
+            ctx.fillStyle = '#1a0d0d';
+            // Bordes
+            ctx.fillRect(0, 0, p.width, 10); // Borde sup
+            ctx.fillRect(0, p.height-10, p.width, 10); // Borde inf
+            ctx.fillRect(0, 0, 10, p.height); // Borde izq
+            ctx.fillRect(p.width-10, 0, 10, p.height); // Borde der
+            
+            // Remaches
+            ctx.fillStyle = '#442211';
+            for(let i=20; i<p.width; i+=40) {
+                ctx.fillRect(i, 4, 4, 4); // Remaches arriba
+                ctx.fillRect(i, p.height-8, 4, 4); // Remaches abajo
+            }
+            
+            // 3. Grietas de lava (solo si es plataforma grande)
+            if (p.height > 50) {
+                 ctx.strokeStyle = COLORS.lavaBright;
+                 ctx.lineWidth = 2;
+                 ctx.beginPath();
+                 ctx.moveTo(50, 50);
+                 ctx.lineTo(80, 70);
+                 ctx.lineTo(120, 50);
+                 ctx.stroke();
+                 
+                 // Glow de la grieta
+                 ctx.shadowColor = COLORS.lavaMid;
+                 ctx.shadowBlur = 10;
+                 ctx.stroke();
+                 ctx.shadowBlur = 0;
+            }
+            
+            // 4. Borde "pisable" caliente
+            // Si la plataforma está sobre lava, el borde inferior brilla
+            let grad = ctx.createLinearGradient(0, p.height, 0, p.height-20);
+            grad.addColorStop(0, 'rgba(255, 100, 0, 0.5)');
+            grad.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = grad;
+            ctx.fillRect(0, p.height-30, p.width, 30);
+
+            ctx.restore();
+        });
+    }
+
+    // --- CAPAS FRONTALES (FOREGROUND) ---
+    function drawForeground(ctx, camX, camY) {
+        // Capa F1: Estructuras borrosas muy cercanas (Negras)
+        ctx.save();
+        let pXF1 = -camX * 1.5; 
+        ctx.translate(pXF1, -camY * 1.5);
+        ctx.fillStyle = '#000';
+        
+        for(let i=0; i<4; i++) {
+            let offset = i * 1000 + 100;
+            // Viga gigante pasando por enfrente
+            ctx.beginPath();
+            ctx.moveTo(offset, -50);
+            ctx.lineTo(offset + 100, -50);
+            ctx.lineTo(offset - 50, GAME_HEIGHT + 50);
+            ctx.lineTo(offset - 150, GAME_HEIGHT + 50);
+            ctx.fill();
+        }
+        ctx.restore();
+
+        // Capa F2: Resplandor de calor general (Overlay inferior)
+        let grad = ctx.createLinearGradient(0, GAME_HEIGHT, 0, GAME_HEIGHT - 200);
+        grad.addColorStop(0, 'rgba(255, 60, 0, 0.2)');
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, GAME_HEIGHT-200, GAME_WIDTH, 200);
+    }
+
+    function loop() {
+        gameTime++;
+        camera.x = Math.sin(gameTime * 0.005) * 300 + 200; 
+
+        spawnParticles();
+        player.update();
+        walker.update();
+        flyer.update();
+        particles.forEach((p, i) => {
+            p.update();
+            if(p.life <= 0) particles.splice(i, 1);
+        });
+
+        // DRAW
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 1. Fondo
+        drawMagmaBackground(ctx, camera.x, camera.y);
+        
+        // 2. Mundo
+        ctx.save();
+        ctx.translate(-camera.x + 200, 0); 
+
+        drawFoundryPlatforms(ctx);
+        
+        // Entidades
+        ctx.save();
+        ctx.translate(camera.x - 200, 0); 
+        ctx.restore();
+        
+        let screenOffsetX = camera.x;
+        ctx.save();
+        ctx.translate(screenOffsetX - 200, 0); 
+        ctx.translate(-screenOffsetX + 200, 0); 
+            // Dibujar particulas DETRAS de personajes (ceniza)
+            particles.forEach(p => { if(p.type === 'smoke') p.draw(ctx); });
+            
+            player.draw(ctx);
+            walker.draw(ctx);
+            flyer.draw(ctx);
+            
+            // Dibujar particulas DELANTE de personajes (brasas)
+            particles.forEach(p => { if(p.type !== 'smoke') p.draw(ctx); });
+        ctx.restore();
+        ctx.restore();
+
+        // 3. Frente
+        drawForeground(ctx, camera.x, camera.y);
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>
