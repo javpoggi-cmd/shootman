@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Level 5 - Reactor Core (Fixed)</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050000;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 60px rgba(255, 60, 0, 0.3); /* Glow rojo del reactor */
+            border: 4px solid #441111;
+            background: #000;
+            width: 1280px;
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            background-color: #0a0202;
+            image-rendering: pixelated;
+            width: 100%;
+            height: 100%;
+        }
+        /* Scanlines sutiles y viñeta */
+        #scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: 
+                linear-gradient(rgba(0, 0, 0, 0) 50%, rgba(0, 0, 0, 0.2) 50%),
+                radial-gradient(circle, transparent 60%, #000 100%);
+            background-size: 100% 4px, 100% 100%;
+            pointer-events: none;
+            z-index: 10;
+            opacity: 0.8;
+        }
+        #ui-layer {
+            position: absolute; top: 20px; left: 20px; z-index: 20;
+            color: #ff8800; text-shadow: 0 0 4px #ff0000;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    <div id="scanlines"></div>
+    <div id="ui-layer">
+        <h3>SECTOR: NÚCLEO DE MAGMA</h3>
+        <p>TEMPERATURA: CRÍTICA</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- PALETA DE COLORES (TEMA: REACTOR/MAGMA) ---
+    const THEME = {
+        playerSuit: '#222222',    // Traje negro táctico
+        playerSkin: '#aa5544',    // Piel iluminada por fuego
+        playerAccent: '#00ccff',  // Visor azul (contraste)
+        enemyBody: '#551111',     // Metal rojo oxidado
+        enemyLight: '#ffaa00',    // Luces amarillas
+        sky: '#0f0202',           // Cielo casi negro rojizo
+        bgLayers: ['#1a0505', '#2b0a0a', '#3c1111', '#4d1818', '#5e2222'],
+        fog: 'rgba(255, 50, 0, 0.05)'
+    };
+
+    // --- UTILIDADES: Texturas Procedurales ---
+    function createPattern(color1, color2) {
+        const pC = document.createElement('canvas');
+        pC.width = 20; pC.height = 20;
+        const pCtx = pC.getContext('2d');
+        pCtx.fillStyle = color1; pCtx.fillRect(0,0,20,20);
+        pCtx.fillStyle = color2;
+        pCtx.fillRect(0,0,10,10); pCtx.fillRect(10,10,10,10); // Checkered
+        return ctx.createPattern(pC, 'repeat');
+    }
+    const METAL_PATTERN = createPattern('#221111', '#1a0a0a');
+
+    // --- SISTEMA DE PARTÍCULAS (Cenizas y Chispas) ---
+    const particles = [];
+    function spawnParticle(x, y, type) {
+        particles.push({
+            x: x, y: y,
+            vx: (Math.random() - 0.5) * 2,
+            vy: type === 'spark' ? -(Math.random() * 3 + 2) : (Math.random() * 0.5 + 0.2),
+            life: 1.0,
+            type: type // 'ash' (ceniza cae) o 'spark' (chispa sube)
+        });
+    }
+    
+    function drawParticles(ctx) {
+        ctx.save();
+        for(let i=particles.length-1; i>=0; i--) {
+            let p = particles[i];
+            p.x += p.vx; p.y += p.vy; p.life -= 0.015;
+            
+            if(p.type === 'spark') {
+                ctx.fillStyle = `rgba(255, 200, 50, ${p.life})`;
+                ctx.fillRect(p.x, p.y, 2, 2);
+            } else {
+                ctx.fillStyle = `rgba(100, 50, 50, ${p.life * 0.5})`;
+                ctx.fillRect(p.x, p.y, 4, 4);
+            }
+            if(p.life <= 0) particles.splice(i, 1);
+        }
+        ctx.restore();
+    }
+
+    // --- CLASES ORIGINALES (Lógica y Geometría INTACTAS) ---
+    // Solo se han cambiado los colores (fillStyle) por los del tema.
+
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 24; this.height = 40;
+            this.vx = 0; 
+            this.animTimer = 0;
+            this.facingRight = true;
+            this.state = 'wait';
+            this.stateTimer = 0;
+        }
+
+        update() {
+            // Lógica original
+            this.animTimer++; this.stateTimer++;
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3; this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3; this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+        }
+
+        draw(ctx) {
+            // GEOMETRÍA EXACTA DE PRUEBA.HTML
+            ctx.save(); 
+            // Color cambiado para el nivel
+            ctx.fillStyle = THEME.playerSuit; 
+            
+            let lean = 0; if (Math.abs(this.vx) > 1) lean = this.facingRight ? 3 : -3; 
+            ctx.translate(lean, 0);
+            
+            // Animación de piernas
+            if (Math.abs(this.vx) > 0.5) {
+                let cycle = Math.sin(this.animTimer * 0.5);
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15 + cycle * 3); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15 - cycle * 3);
+            } else { 
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15); 
+            }
+            
+            // Cuerpo y Cabeza
+            ctx.fillStyle = '#333'; // Chaleco oscuro
+            ctx.fillRect(this.x, this.y + 10, this.width, 18);
+            
+            ctx.fillStyle = '#771111'; // Mochila roja oscura
+            ctx.fillRect(this.facingRight ? this.x - 4 : this.x + 20, this.y + 12, 4, 10); 
+            
+            ctx.fillStyle = '#111'; // Casco negro
+            ctx.fillRect(this.x + 2, this.y, 20, 12); 
+            
+            ctx.fillStyle = THEME.playerAccent; // Visor brillante
+            // Efecto de brillo solo en el visor
+            ctx.shadowColor = THEME.playerAccent; ctx.shadowBlur = 10;
+            ctx.fillRect(this.facingRight ? this.x + 12 : this.x + 2, this.y + 3, 10, 4); 
+            ctx.shadowBlur = 0;
+
+            // Arma
+            ctx.fillStyle = '#666';
+            let gunX = this.facingRight ? this.x + 14 : this.x - 6; 
+            let gunY = this.y + 14;
+            ctx.fillRect(gunX, gunY, 16, 6);
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 30;
+            this.vx = 2; this.dir = 1; this.timer = 0; this.state = 'walk'; this.startX = x;
+        }
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) { this.state = 'wait'; this.waitTimer = 60; }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) { this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk'; }
+            }
+        }
+        draw(ctx) {
+            // GEOMETRÍA EXACTA DE PRUEBA.HTML
+            ctx.fillStyle = THEME.enemyBody; // Rojo óxido
+            let anim = Math.sin(this.timer * 0.2);
+            let drawY = this.y - 10; 
+            
+            ctx.fillRect(this.x, drawY, this.width, this.height);
+            // Ojo
+            ctx.fillStyle = '#220000'; ctx.fillRect(this.x + 10, drawY + 5, 10, 10); 
+            ctx.fillStyle = THEME.enemyLight; // Luz amarilla
+            ctx.fillRect(this.x + 13, drawY + 8, 4, 4);
+            
+            // Brazos rotatorios
+            ctx.fillStyle = '#331111'; 
+            ctx.save(); ctx.translate(this.x + 5, drawY + 15); ctx.rotate(anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            ctx.save(); ctx.translate(this.x + 25, drawY + 15); ctx.rotate(-anim); ctx.fillRect(0, 0, 5, 15); ctx.restore();
+            
+            // Piernas
+            ctx.fillRect(this.x + 5, drawY + 30, 5, 10 + anim * 5); 
+            ctx.fillRect(this.x + 20, drawY + 30, 5, 10 - anim * 5);
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 20; this.startX = x; this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1; 
+        }
+        draw(ctx) {
+            // GEOMETRÍA EXACTA DE PRUEBA.HTML
+            let flap = Math.sin(this.timer * 0.8) * 10;
+            
+            // Cuerpo
+            ctx.fillStyle = THEME.enemyBody;
+            ctx.fillRect(this.x, this.y, 30, 20); 
+            
+            // Alas
+            ctx.fillStyle = '#442222'; // Metal oscuro 
+            ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(this.x - 10, this.y - 10 + flap); ctx.lineTo(this.x + 10, this.y); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(this.x + 30, this.y); ctx.lineTo(this.x + 40, this.y - 10 + flap); ctx.lineTo(this.x + 20, this.y); ctx.fill(); 
+            
+            // Motor
+            ctx.fillStyle = THEME.enemyLight; // Amarillo brillante
+            ctx.shadowColor = THEME.enemyLight; ctx.shadowBlur = 5;
+            ctx.fillRect(this.x + 10, this.y + 5, 10, 5);
+            ctx.shadowBlur = 0;
+        }
+    }
+
+    // --- INSTANCIAS ---
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450);
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200 },
+        { x: 750, y: 490, width: 400, height: 20 }
+    ];
+
+    // --- DIBUJADO DE MAPA CON TEXTURAS DE "NIVEL AVANZADO" ---
+    function drawMap(ctx) {
+        platforms.forEach(p => {
+            // 1. Relleno base texturizado
+            ctx.fillStyle = METAL_PATTERN; 
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+            
+            // 2. Tinte de color rojizo
+            ctx.fillStyle = 'rgba(50, 10, 5, 0.6)';
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+
+            // 3. Parte superior (Suelo)
+            ctx.fillStyle = '#1a0505'; 
+            ctx.fillRect(p.x, p.y, p.width, 10);
+            
+            // 4. Detalles: Rejillas industriales y brillo de lava abajo
+            if (p.height > 50) {
+                // Línea decorativa
+                ctx.fillStyle = '#ffaa00';
+                ctx.globalAlpha = 0.2;
+                ctx.fillRect(p.x, p.y + 15, p.width, 2);
+                ctx.globalAlpha = 1.0;
+
+                // Rejillas
+                ctx.fillStyle = '#000';
+                for(let i=20; i<p.width-20; i+=30) {
+                    ctx.fillRect(p.x+i, p.y+30, 10, p.height-40);
+                }
+                
+                // Brillo interior (lava detrás de las rejillas)
+                ctx.fillStyle = 'rgba(255, 50, 0, 0.1)';
+                ctx.fillRect(p.x, p.y+30, p.width, p.height-40);
+            }
+        });
+    }
+
+    // --- FONDO CORREGIDO (Capas visibles y con transparencia) ---
+    function drawBackground(ctx, cameraX) {
+        // Cielo base
+        ctx.fillStyle = THEME.sky;
+        ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+        // Sol/Núcleo distante
+        let sunGrad = ctx.createRadialGradient(GAME_WIDTH/2, GAME_HEIGHT, 100, GAME_WIDTH/2, GAME_HEIGHT, 600);
+        sunGrad.addColorStop(0, '#441100');
+        sunGrad.addColorStop(1, 'transparent');
+        ctx.fillStyle = sunGrad;
+        ctx.fillRect(0,0, GAME_WIDTH, GAME_HEIGHT);
+
+        // Definición de capas con objetos ESPACIADOS
+        const layers = [
+            // Capa 0: Siluetas masivas muy lejanas (Montañas/Fábricas)
+            { speed: 0.05, color: '#110202', type: 'skyline', gap: 0 }, 
+            // Capa 1: Grandes columnas lejanas (Con huecos)
+            { speed: 0.15, color: '#1a0505', type: 'pillars', gap: 200, width: 80 }, 
+            // Capa 2: Tuberías medias (Más detalles)
+            { speed: 0.30, color: '#2a0a0a', type: 'pipes', gap: 300, width: 40 }, 
+            // Capa 3: Estructuras cercanas
+            { speed: 0.60, color: '#3a1111', type: 'structure', gap: 500, width: 200 }
+        ];
+
+        layers.forEach((layer, idx) => {
+            ctx.save();
+            // Parallax infinito
+            let px = -(cameraX * layer.speed) % 2000; 
+            if (px > 0) px -= 2000;
+            ctx.translate(px, 0);
+
+            // Dibujar suficiente para cubrir pantalla (2 ciclos de 2000px)
+            for(let i=0; i<2; i++) {
+                ctx.save();
+                ctx.translate(i * 2000, 0);
+
+                ctx.fillStyle = layer.color;
+                
+                if (layer.type === 'skyline') {
+                    // Horizonte continuo irregular
+                    ctx.beginPath();
+                    ctx.moveTo(0, 720);
+                    for(let k=0; k<=2000; k+=100) {
+                        let h = 400 + Math.sin(k*0.01 + idx)*100 + Math.random()*50;
+                        ctx.lineTo(k, 720 - h);
+                    }
+                    ctx.lineTo(2000, 720);
+                    ctx.fill();
+                } 
+                else if (layer.type === 'pillars') {
+                    // Columnas con mucho espacio entre ellas
+                    for(let k=0; k<2000; k+= layer.gap) {
+                        ctx.fillRect(k, 100, layer.width, 620);
+                        // Luz en la columna
+                        ctx.fillStyle = 'rgba(255,100,0,0.1)';
+                        ctx.fillRect(k+10, 200, 5, 50);
+                        ctx.fillStyle = layer.color;
+                    }
+                }
+                else if (layer.type === 'pipes') {
+                    // Tuberías complejas
+                    for(let k=0; k<2000; k+= layer.gap) {
+                        ctx.fillRect(k, 0, layer.width, 720);
+                        // Conexión horizontal
+                        if(k % 600 === 0) ctx.fillRect(k, 300, 300, 20);
+                    }
+                }
+                else if (layer.type === 'structure') {
+                    // Estructuras grandes colgantes
+                    for(let k=0; k<2000; k+= layer.gap) {
+                        ctx.beginPath();
+                        ctx.moveTo(k, 0);
+                        ctx.lineTo(k+50, 300);
+                        ctx.lineTo(k+150, 300);
+                        ctx.lineTo(k+200, 0);
+                        ctx.fill();
+                        
+                        // Luz roja parpadeante
+                        if (Math.floor(Date.now()/500 + k) % 2 === 0) {
+                            ctx.fillStyle = '#ff0000';
+                            ctx.shadowColor = 'red'; ctx.shadowBlur = 10;
+                            ctx.fillRect(k+90, 280, 20, 20);
+                            ctx.shadowBlur = 0;
+                            ctx.fillStyle = layer.color;
+                        }
+                    }
+                }
+                ctx.restore();
+            }
+            ctx.restore();
+
+            // Neblina entre capas para profundidad (clave para que se vean separadas)
+            if (idx < 3) {
+                ctx.fillStyle = THEME.fog;
+                ctx.fillRect(0,0,GAME_WIDTH, GAME_HEIGHT);
+            }
+        });
+    }
+
+    // --- CAPA DELANTERA (FOREGROUND) ---
+    // Pasa por DELANTE de las plataformas
+    function drawForeground(ctx, cameraX) {
+        let speed = 1.2;
+        let px = -(cameraX * speed) % 1500;
+        if (px > 0) px -= 1500;
+
+        ctx.save();
+        ctx.translate(px, 0);
+        
+        // Color muy oscuro, casi silueta, desenfocado
+        ctx.fillStyle = '#0a0000';
+        ctx.filter = 'blur(3px)';
+        
+        for(let i=0; i<2; i++) {
+            let off = i * 1500;
+            // Cadenas gigantes colgando
+            ctx.fillRect(off + 200, 0, 20, 400);
+            ctx.fillRect(off + 210, 400, 40, 50); // Gancho
+            
+            // Tubería rota abajo a la derecha
+            ctx.fillRect(off + 1000, 650, 500, 70);
+        }
+        ctx.filter = 'none';
+        ctx.restore();
+    }
+
+    // --- BUCLE PRINCIPAL ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+
+    function loop() {
+        gameTime++;
+        camera.x += 2; // Velocidad de scroll constante para demo
+
+        // Generar partículas aleatorias
+        if(Math.random() > 0.8) spawnParticle(Math.random()*GAME_WIDTH, GAME_HEIGHT, 'spark');
+        if(Math.random() > 0.9) spawnParticle(Math.random()*GAME_WIDTH, 0, 'ash');
+
+        // Update
+        player.update();
+        walker.update();
+        flyer.update();
+
+        // Render
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 1. Fondo
+        drawBackground(ctx, camera.x);
+
+        // 2. Juego (Mundo)
+        ctx.save();
+        ctx.translate(-200, 0); // Centrado visual
+        
+        drawMap(ctx);
+        
+        // Dibujar Entidades
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+        
+        drawParticles(ctx);
+        
+        ctx.restore();
+
+        // 3. Foreground (Capa delantera)
+        drawForeground(ctx, camera.x);
+
+        // 4. Efecto de calor (Overlay)
+        ctx.fillStyle = 'rgba(255, 100, 0, 0.03)';
+        ctx.globalCompositeOperation = 'screen';
+        ctx.fillRect(0,0,GAME_WIDTH, GAME_HEIGHT);
+        ctx.globalCompositeOperation = 'source-over';
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>

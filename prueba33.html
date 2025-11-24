@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Sector Cero - Criogenia</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #00050a; /* Azul muy oscuro casi negro */
+            font-family: 'Courier New', Courier, monospace; /* Fuente original */
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            /* Glow azulado frío en lugar de sombra negra */
+            box-shadow: 0 0 50px rgba(0, 200, 255, 0.15); 
+            border: 4px solid #224455;
+            background: #000810;
+            width: 1280px; 
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            background-color: #000810;
+            image-rendering: pixelated;
+            width: 100%;
+            height: 100%;
+        }
+        
+        /* Mantenemos las scanlines originales pero con tinte azul */
+        #scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 10, 20, 0.25) 50%), 
+                        linear-gradient(90deg, rgba(0, 255, 255, 0.03), rgba(0, 0, 255, 0.03));
+            background-size: 100% 4px, 4px 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+        
+        /* Viñeta helada en los bordes */
+        #frost-vignette {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, transparent 60%, rgba(0, 100, 150, 0.2) 100%);
+            pointer-events: none;
+            z-index: 9;
+        }
+
+        #debug-ui {
+            position: absolute; top: 10px; left: 10px; color: #00ffff; z-index: 20;
+            background: rgba(0, 10, 20, 0.8); padding: 10px;
+            border: 1px solid #005555;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="testCanvas"></canvas>
+    <div id="scanlines"></div>
+    <div id="frost-vignette"></div>
+    <div id="debug-ui">
+        <h3>NIVEL 3: DATA FREEZE</h3>
+        <p>Temp: -140°C</p>
+        <p>Sistemas: ESTABLES</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('testCanvas');
+    const ctx = canvas.getContext('2d');
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- PALETA DE COLORES (Fria / Tecnológica) ---
+    // Mantenemos la lógica de colores planos del original, pero cambiamos el tema.
+    const PALETTE = {
+        bg: '#000810',
+        skyGradient: ['#000810', '#001122'],
+        
+        // Capas de fondo (De más lejano a más cercano)
+        layers: [
+            { color: '#00111a', detail: '#002233' }, // Pared fondo
+            { color: '#001a26', detail: '#003344' }, // Servidores lejanos
+            { color: '#002233', detail: '#004455' }, // Tubos medios
+            { color: '#003344', detail: '#006688' }, // Estructuras cercanas
+        ],
+        
+        // Plataformas
+        groundTop: '#aaddff',      // Nieve/Hielo en la superficie
+        groundBody: '#002233',     // Metal oscuro
+        groundDetail: '#005577',   // Detalles de rejilla
+        
+        // Efectos
+        neon: '#00ffff',
+        fog: 'rgba(0, 200, 255, 0.05)'
+    };
+
+    // Mantenemos colores de gameplay reconocibles pero ajustamos el jugador al ambiente
+    const COLORS = { 
+        player: '#cceeff', // Jugador más pálido por el frío
+        playerAccent: '#00ffff', // Visor cian
+        bullet: '#aaddff', 
+        enemyBullet: '#ff4444', // Mantenemos rojo para peligro
+        enemy: '#cc3333'
+    };
+
+    // --- SISTEMA DE PARTÍCULAS (Nieve digital / Hielo) ---
+    const particles = [];
+    function spawnParticle(x, y, type) {
+        particles.push({
+            x: x, y: y,
+            vx: (Math.random() - 0.5) * 0.5, // Flotan suavemente
+            vy: (Math.random() * 0.5) + 0.2, // Caen lento
+            size: Math.random() * 2 + 1,
+            life: Math.random() * 100 + 100,
+            type: type // 'snow' o 'data'
+        });
+    }
+
+    // Inicializar algunas partículas
+    for(let i=0; i<100; i++) spawnParticle(Math.random()*GAME_WIDTH, Math.random()*GAME_HEIGHT, 'snow');
+
+    // --- VARIABLES ---
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+
+    // --- CLASES (Mismas físicas y tamaños que el original) ---
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 24; this.height = 40;
+            this.vx = 0; this.animTimer = 0; this.facingRight = true;
+            this.state = 'wait'; this.stateTimer = 0;
+        }
+        update() {
+            this.animTimer++; this.stateTimer++;
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3; this.facingRight = true; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3; this.facingRight = false; this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+        }
+        draw(ctx) {
+            ctx.save(); 
+            let lean = 0; if (Math.abs(this.vx) > 1) lean = this.facingRight ? 3 : -3; 
+            ctx.translate(lean, 0);
+            
+            // Piernas (Mismo estilo blocky)
+            ctx.fillStyle = '#112233'; // Pantalón térmico oscuro
+            if (Math.abs(this.vx) > 0.5) {
+                let cycle = Math.sin(this.animTimer * 0.5);
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15 + cycle * 3); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15 - cycle * 3);
+            } else { 
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15); 
+            }
+            
+            // Cuerpo
+            ctx.fillStyle = COLORS.player; ctx.fillRect(this.x, this.y + 10, this.width, 18);
+            ctx.fillStyle = '#ffffff'; ctx.fillRect(this.facingRight ? this.x - 4 : this.x + 20, this.y + 12, 4, 10); // Mochila blanca
+            ctx.fillStyle = '#112233'; ctx.fillRect(this.x + 2, this.y, 20, 12); // Casco oscuro
+            
+            // Visor (Brillante)
+            ctx.fillStyle = COLORS.playerAccent; 
+            ctx.shadowColor = COLORS.playerAccent; ctx.shadowBlur = 5; // Pequeño glow
+            ctx.fillRect(this.facingRight ? this.x + 12 : this.x + 2, this.y + 3, 10, 4);
+            ctx.shadowBlur = 0;
+
+            // Arma
+            ctx.fillStyle = '#8899aa';
+            let gunX = this.facingRight ? this.x + 14 : this.x - 6; 
+            ctx.fillRect(gunX, this.y + 14, 16, 6);
+            ctx.restore();
+            
+            // Aliento (Vapor por el frío)
+            if (gameTime % 60 < 30) {
+                ctx.fillStyle = 'rgba(255,255,255,0.3)';
+                let breathX = this.facingRight ? this.x + 20 : this.x;
+                ctx.fillRect(breathX, this.y + 5, 4, 4);
+                ctx.fillRect(breathX + (this.facingRight?3:-3), this.y + 4, 3, 3);
+            }
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y; this.width = 30; this.height = 30;
+            this.vx = 2; this.dir = 1; this.timer = 0; this.state = 'walk'; this.startX = x; this.waitTimer = 0;
+        }
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) { this.state = 'wait'; this.waitTimer = 60; }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) { this.dir *= -1; this.vx = this.dir * 2; this.state = 'walk'; }
+            }
+        }
+        draw(ctx) {
+            // Enemigo adaptado: Drone de seguridad terrestre
+            ctx.fillStyle = COLORS.enemy;
+            let anim = Math.sin(this.timer * 0.2);
+            let drawY = this.y - 10; 
+            
+            ctx.fillRect(this.x, drawY, this.width, this.height);
+            // Ojo escáner
+            ctx.fillStyle = '#000'; ctx.fillRect(this.x + 5, drawY + 5, 20, 8); 
+            let scannerX = this.x + 5 + (Math.sin(this.timer * 0.1) + 1) * 8;
+            ctx.fillStyle = '#ff0000'; ctx.fillRect(scannerX, drawY + 6, 4, 6); // Luz roja tipo Cylon
+
+            // Patas
+            ctx.fillStyle = '#550000'; 
+            ctx.fillRect(this.x + 2, drawY + 30, 6, 10 + anim * 5); 
+            ctx.fillRect(this.x + 22, drawY + 30, 6, 10 - anim * 5);
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) { this.x = x; this.y = y; this.startX = x; this.timer = 0; }
+        update() { this.timer++; this.x = this.startX + Math.sin(this.timer * 0.02) * 200; this.y += Math.cos(this.timer * 0.05) * 1; }
+        draw(ctx) {
+            let flap = Math.sin(this.timer * 0.8) * 10;
+            // Drone volador
+            ctx.fillStyle = '#444'; ctx.fillRect(this.x, this.y, 30, 20); 
+            ctx.fillStyle = '#eee'; // Alas blancas
+            ctx.beginPath(); ctx.moveTo(this.x, this.y); ctx.lineTo(this.x - 10, this.y - 10 + flap); ctx.lineTo(this.x + 10, this.y); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(this.x + 30, this.y); ctx.lineTo(this.x + 40, this.y - 10 + flap); ctx.lineTo(this.x + 20, this.y); ctx.fill(); 
+            ctx.fillStyle = '#0ff'; ctx.fillRect(this.x + 10, this.y + 5, 10, 5); // Motor azul
+        }
+    }
+
+    // --- OBJETOS DEL MUNDO ---
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450);
+    const flyer = new MockFlyer(600, 200);
+
+    const platforms = [
+        { x: 0, y: 540, width: 800, height: 200 }, 
+        { x: 750, y: 490, width: 400, height: 20 }
+    ];
+
+    // --- DIBUJAR FONDO (PARALLAX) ---
+    // Manteniendo el estilo "Blocky" pero cambiando la arquitectura a Servidores/Tubos
+    function drawLayer(ctx, config, cameraX, cameraY, index) {
+        let parallaxX = -cameraX * config.speed; 
+        let parallaxY = -cameraY * (config.speed * 0.5); 
+        ctx.save(); 
+        ctx.translate(parallaxX, parallaxY);
+        
+        let totalW = config.width; // Módulo repetitivo
+        let startI = Math.floor(-parallaxX / totalW) - 2; 
+        let endI = startI + Math.ceil(GAME_WIDTH / totalW) + 5;
+        
+        for (let i = startI; i < endI; i++) {
+            let x = i * totalW;
+            let baseY = GAME_HEIGHT - config.baseHeight;
+            
+            // Variación pseudo-aleatoria basada en índice para que no se vea tan "tileado"
+            let randomH = Math.abs(Math.sin(i * 432.1 + index * 55.2)) * 100;
+
+            ctx.fillStyle = config.color;
+
+            if (index === 0) { 
+                // Capa Lejana: Pared masiva del complejo con columnas
+                ctx.fillRect(x, 100, totalW - 20, GAME_HEIGHT);
+                // Luces de estado lejanas
+                if (i % 2 === 0) {
+                    ctx.fillStyle = '#001122';
+                    ctx.fillRect(x + 50, 200, 20, GAME_HEIGHT);
+                }
+            } 
+            else if (index === 1) {
+                // Capa Media: Bancos de Servidores Gigantes
+                let h = 400 + randomH;
+                ctx.fillRect(x + 20, GAME_HEIGHT - h, totalW - 40, h);
+                
+                // Luces de servidores (Parpadeo)
+                ctx.fillStyle = Math.random() > 0.9 ? '#00ffff' : '#003344';
+                for(let r=0; r < h; r+=30) {
+                    if ((i+r)%5 === 0) ctx.fillRect(x + 30, GAME_HEIGHT - h + r, 5, 5);
+                }
+            }
+            else if (index === 2) {
+                // Capa Media-Cerca: Tubos de Criogenia
+                // Dibujamos tubos cilíndricos simples
+                let pipeW = 60;
+                ctx.fillStyle = config.color;
+                ctx.fillRect(x + 50, 0, pipeW, GAME_HEIGHT); // Tubo vertical infinito
+                
+                // Brillo del tubo para dar volumen (estilo vectorial simple)
+                ctx.fillStyle = config.detail;
+                ctx.fillRect(x + 55, 0, 10, GAME_HEIGHT);
+                
+                // Abrazadera
+                ctx.fillStyle = '#000';
+                ctx.fillRect(x + 45, GAME_HEIGHT - 200, pipeW + 10, 20);
+            }
+            else if (index === 3) {
+                // Capa Cerca: Estructuras de soporte y rejillas
+                let h = 200 + randomH;
+                ctx.fillRect(x, GAME_HEIGHT - h, totalW, h);
+                
+                // Patrón de rejilla industrial
+                ctx.fillStyle = '#000';
+                for(let g=0; g<totalW; g+=20) {
+                    ctx.fillRect(x + g, GAME_HEIGHT - h, 2, h); // Líneas verticales
+                    ctx.fillRect(x, GAME_HEIGHT - h + g, totalW, 2); // Líneas horizontales
+                }
+                // Borde superior
+                ctx.fillStyle = PALETTE.groundTop;
+                ctx.fillRect(x, GAME_HEIGHT - h, totalW, 4);
+            }
+        }
+        ctx.restore();
+    }
+
+    // Configuración de capas para Parallax
+    const bgLayers = [
+        { speed: 0.05, color: PALETTE.layers[0].color, detail: PALETTE.layers[0].detail, width: 400, baseHeight: 600 },
+        { speed: 0.15, color: PALETTE.layers[1].color, detail: PALETTE.layers[1].detail, width: 200, baseHeight: 400 },
+        { speed: 0.30, color: PALETTE.layers[2].color, detail: PALETTE.layers[2].detail, width: 300, baseHeight: 0 }, // Tubos van de arriba a abajo
+        { speed: 0.60, color: PALETTE.layers[3].color, detail: PALETTE.layers[3].detail, width: 250, baseHeight: 150 }
+    ];
+
+    function drawBackground(ctx, cameraX, cameraY) {
+        // Fondo base
+        let grad = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        grad.addColorStop(0, PALETTE.skyGradient[0]);
+        grad.addColorStop(1, PALETTE.skyGradient[1]);
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+        bgLayers.forEach((layer, i) => drawLayer(ctx, layer, cameraX, cameraY, i));
+        
+        // Neblina baja (Gradiente simple como en el juego original pero azul)
+        let fogGrad = ctx.createLinearGradient(0, GAME_HEIGHT - 250, 0, GAME_HEIGHT);
+        fogGrad.addColorStop(0, 'rgba(0, 20, 40, 0)');
+        fogGrad.addColorStop(1, 'rgba(0, 200, 255, 0.1)');
+        ctx.fillStyle = fogGrad;
+        ctx.fillRect(0, GAME_HEIGHT - 250, GAME_WIDTH, 250);
+    }
+
+    // --- CAPA DELANTERA (FOREGROUND) ---
+    function drawForeground(ctx, cameraX) {
+        let parallaxX = -cameraX * 1.2; 
+        ctx.save();
+        ctx.translate(parallaxX, 0);
+        
+        // Cables colgando que pasan rápido frente a la cámara
+        // Mantenemos la estética de silueta negra del original
+        let spacing = 800;
+        let startI = Math.floor(-parallaxX / spacing) - 1; 
+        let endI = startI + Math.ceil(GAME_WIDTH / spacing) + 2;
+
+        for(let i = startI; i < endI; i++) {
+            let x = i * spacing;
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+            ctx.lineWidth = 8;
+            // Curva de cable
+            ctx.moveTo(x, -50);
+            ctx.quadraticCurveTo(x + 200, 400, x + 600, -50);
+            ctx.stroke();
+            
+            // Ocasional estructura borrosa
+            ctx.fillStyle = 'rgba(0, 20, 30, 0.9)';
+            ctx.fillRect(x + 300, -50, 50, 200);
+        }
+        ctx.restore();
+    }
+
+    function drawMap(ctx) {
+        platforms.forEach(p => {
+            // Cuerpo de la plataforma (Bloque sólido, estilo original)
+            ctx.fillStyle = PALETTE.groundBody; 
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+            
+            // Detalle: Rejillas o lineas tecnológicas
+            ctx.fillStyle = PALETTE.groundDetail;
+            for(let i=0; i<p.width; i+=40) {
+                ctx.fillRect(p.x + i, p.y + 10, 2, p.height - 10);
+            }
+
+            // Superficie (Hielo/Nieve acumulada)
+            ctx.fillStyle = PALETTE.groundTop; 
+            ctx.fillRect(p.x, p.y, p.width, 8);
+            
+            // Decoración simple (cajas/servidores en el suelo)
+            ctx.fillStyle = '#001122';
+            if (p.height > p.width) { 
+                // Pared vertical
+            } else { 
+                // Suelo horizontal
+                for (let i = 50; i < p.width - 50; i += 150) {
+                    ctx.fillRect(p.x + i, p.y - 15, 30, 15); // Caja
+                    ctx.fillStyle = '#00ffff'; // Luz caja
+                    ctx.fillRect(p.x + i + 5, p.y - 10, 5, 5);
+                    ctx.fillStyle = '#001122';
+                }
+            }
+        });
+    }
+
+    function loop() {
+        gameTime++;
+        camera.x = Math.sin(gameTime * 0.01) * 200; // Movimiento suave cámara
+
+        // Update Partículas
+        if(Math.random() < 0.3) spawnParticle(camera.x + Math.random()*GAME_WIDTH, 0, 'snow');
+        
+        particles.forEach((p, i) => {
+            p.y += p.vy; p.x += p.vx + Math.sin(gameTime * 0.02) * 0.5; p.life--;
+            if(p.y > GAME_HEIGHT || p.life <= 0) particles.splice(i, 1);
+        });
+
+        player.update();
+        walker.update();
+        flyer.update();
+
+        // RENDER
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        drawBackground(ctx, camera.x, camera.y);
+        
+        ctx.save();
+        ctx.translate(-camera.x + 200, 0); 
+
+        drawMap(ctx);
+        
+        // Dibujar Partículas (Detrás personajes)
+        ctx.fillStyle = '#ffffff';
+        particles.forEach(p => {
+            ctx.globalAlpha = p.life / 200;
+            ctx.fillRect(p.x, p.y, p.size, p.size); // Cuadrados, no circulos, para mantener estilo pixel
+        });
+        ctx.globalAlpha = 1;
+
+        ctx.restore(); // Fin mundo
+
+        // Personajes (Hack visual para el testbed)
+        ctx.save();
+        let screenOffsetX = camera.x;
+        
+        // Personajes dibujados en sus posiciones relativas pero trasladados visualmente
+        // Esto es solo para el test visual, en el juego real la cámara funciona diferente.
+        drawMap(ctx); // Redibujamos mapa estatico para referencia visual clara de colision
+        
+        // Traslación local para entidades
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+        ctx.restore();
+
+        drawForeground(ctx, camera.x);
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>

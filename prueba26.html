@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Crimson Keep: Visual Test</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050002;
+            font-family: 'Cinzel', serif; /* Fuente estilo fantasía si estuviera disponible, fallback a serif */
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-border {
+            position: relative;
+            /* Borde estilo marco de cuadro antiguo */
+            border: 8px solid #2a1010;
+            outline: 2px solid #552222;
+            box-shadow: 0 0 100px rgba(255, 50, 0, 0.15);
+            width: 1280px;
+            height: 720px;
+            background: #000;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        /* UI Sobrepuesta */
+        #vignette {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, transparent 60%, rgba(50, 0, 10, 0.8) 100%);
+            pointer-events: none;
+            mix-blend-mode: multiply;
+            z-index: 10;
+        }
+        #grain {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            opacity: 0.03;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+            pointer-events: none;
+            z-index: 11;
+        }
+        .hud {
+            position: absolute;
+            top: 20px; left: 30px;
+            color: #dcb;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            z-index: 20;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+            border-left: 3px solid #a22;
+            padding-left: 10px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-border">
+    <canvas id="canvas"></canvas>
+    <div id="vignette"></div>
+    <div id="grain"></div>
+    <div class="hud">
+        <h2 style="margin:0; font-size:18px; color:#ff4444;">The Crimson Keep</h2>
+        <span style="font-size:12px; color:#886;">Depth Layering Test v2.0</span>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d', { alpha: false }); // Optimización
+    const WIDTH = 1280;
+    const HEIGHT = 720;
+    canvas.width = WIDTH;
+    canvas.height = HEIGHT;
+
+    // --- CONFIGURACIÓN ESTÉTICA ---
+    const THEME = {
+        skyTop: '#1a0505',
+        skyBottom: '#4a1015',
+        fog: 'rgba(80, 20, 20, 0.3)',
+        stoneDark: '#1a1a1a',
+        stoneLight: '#3a2a2a',
+        accentGold: '#ffd700',
+        magicCyan: '#00ffee',
+        bloodRed: '#ff2222',
+        torch: 'rgba(255, 150, 50, 0.1)'
+    };
+
+    // --- UTILIDADES ---
+    const rand = (min, max) => Math.random() * (max - min) + min;
+    
+    // --- SISTEMA DE PARTÍCULAS (CENIZAS Y BRASAS) ---
+    const particles = [];
+    class Particle {
+        constructor(x, y, type) {
+            this.x = x; this.y = y;
+            this.type = type; // 'ember', 'ash', 'blood'
+            this.size = rand(1, 3);
+            this.vx = rand(-0.5, 0.5);
+            this.vy = type === 'ember' ? rand(-1, -2) : rand(0.5, 1.5);
+            this.life = 1.0;
+            this.decay = rand(0.01, 0.02);
+            this.color = type === 'ember' ? `255, ${Math.floor(rand(100, 200))}, 0` : '150, 150, 160';
+        }
+        update() {
+            this.x += this.vx + Math.sin(this.y * 0.05) * 0.5; // Movimiento ondulante
+            this.y += this.vy;
+            this.life -= this.decay;
+        }
+        draw(ctx) {
+            ctx.fillStyle = `rgba(${this.color}, ${this.life})`;
+            ctx.globalCompositeOperation = 'screen';
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI*2);
+            ctx.fill();
+            ctx.globalCompositeOperation = 'source-over';
+        }
+    }
+
+    // --- CLASES DEL JUEGO ---
+
+    class Hero {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.w = 24; this.h = 40;
+            this.vx = 0;
+            this.state = 'idle';
+            this.timer = 0;
+            this.facingRight = true;
+            
+            // Simulación de Capa (Verlet integration simplificada)
+            this.cape = [];
+            for(let i=0; i<6; i++) this.cape.push({x:x, y:y});
+        }
+
+        update() {
+            this.timer++;
+            
+            // IA Demo
+            if (this.timer % 200 < 60) {
+                this.vx = 0; this.state = 'idle';
+            } else if (this.timer % 200 < 130) {
+                this.vx = 3; this.facingRight = true; this.state = 'run';
+            } else {
+                this.vx = -3; this.facingRight = false; this.state = 'run';
+            }
+            
+            // Limites
+            this.x += this.vx;
+            if(this.x < 100) this.x = 100;
+            if(this.x > 700) this.x = 700;
+
+            // Físicas de la Capa
+            let anchorX = this.x + 12 - (this.facingRight ? 4 : -4);
+            let anchorY = this.y + 10;
+            
+            this.cape[0].x = anchorX;
+            this.cape[0].y = anchorY;
+
+            for(let i=1; i<this.cape.length; i++) {
+                let prev = this.cape[i-1];
+                let curr = this.cape[i];
+                
+                // Viento + Movimiento
+                let wind = Math.sin(this.timer * 0.1) * 2 - (this.vx * 3); 
+                
+                let dx = prev.x - curr.x + (wind * 0.5);
+                let dy = prev.y - curr.y + 3; // Gravedad
+                
+                curr.x += dx * 0.4;
+                curr.y += dy * 0.4;
+            }
+        }
+
+        draw(ctx) {
+            // Sombra suelo
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.beginPath(); ctx.ellipse(this.x + 12, this.y + 38, 10, 4, 0, 0, Math.PI*2); ctx.fill();
+
+            // 1. Capa (Dibujar detrás)
+            ctx.beginPath();
+            ctx.moveTo(this.cape[0].x, this.cape[0].y);
+            // Curva suave a través de los nodos
+            for(let i=1; i<this.cape.length; i++) {
+                // ctx.lineTo(this.cape[i].x, this.cape[i].y);
+                let xc = (this.cape[i].x + this.cape[i-1].x) / 2;
+                let yc = (this.cape[i].y + this.cape[i-1].y) / 2;
+                ctx.quadraticCurveTo(this.cape[i-1].x, this.cape[i-1].y, xc, yc);
+            }
+            ctx.lineTo(this.cape[this.cape.length-1].x, this.cape[this.cape.length-1].y);
+            
+            ctx.lineWidth = 10;
+            ctx.strokeStyle = '#a00'; // Rojo oscuro
+            ctx.lineCap = 'round';
+            ctx.stroke();
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = '#f00'; // Borde brillante
+            ctx.stroke();
+
+            // 2. Cuerpo (Armadura Oscura)
+            let bounce = Math.abs(Math.sin(this.timer * 0.3)) * 2;
+            
+            ctx.fillStyle = '#1a1a20'; // Armor color
+            
+            // Piernas
+            ctx.fillRect(this.x + 6, this.y + 25, 5, 15 - bounce);
+            ctx.fillRect(this.x + 15, this.y + 25, 5, 15 + bounce);
+
+            // Torso
+            ctx.fillStyle = '#222';
+            ctx.beginPath();
+            ctx.moveTo(this.x + 2, this.y + 8);
+            ctx.lineTo(this.x + 22, this.y + 8);
+            ctx.lineTo(this.x + 18, this.y + 28);
+            ctx.lineTo(this.x + 6, this.y + 28);
+            ctx.fill();
+            
+            // Detalles dorados armadura
+            ctx.fillStyle = THEME.accentGold;
+            ctx.fillRect(this.x + 8, this.y + 12, 8, 8); // Emblema pecho
+
+            // Cabeza (Yelmo con cuernos)
+            let headY = this.y - 2 + bounce;
+            ctx.fillStyle = '#111';
+            ctx.fillRect(this.x + 4, headY, 16, 14);
+            
+            // Cuernos
+            ctx.fillStyle = '#ddd';
+            ctx.beginPath();
+            ctx.moveTo(this.x + 4, headY); ctx.lineTo(this.x, headY - 6); ctx.lineTo(this.x + 6, headY + 2); ctx.fill();
+            ctx.beginPath();
+            ctx.moveTo(this.x + 20, headY); ctx.lineTo(this.x + 24, headY - 6); ctx.lineTo(this.x + 18, headY + 2); ctx.fill();
+
+            // Ojos Brillantes
+            ctx.fillStyle = THEME.magicCyan;
+            ctx.shadowColor = THEME.magicCyan; ctx.shadowBlur = 10;
+            let eyeX = this.facingRight ? this.x + 12 : this.x + 8;
+            ctx.fillRect(eyeX, headY + 4, 6, 2);
+            ctx.shadowBlur = 0;
+
+            // Arma (Espadón rúnico)
+            ctx.save();
+            ctx.translate(this.x + 12, this.y + 20);
+            if(!this.facingRight) ctx.scale(-1, 1);
+            ctx.rotate(0.4 + Math.sin(this.timer * 0.1) * 0.1);
+            
+            // Hoja
+            ctx.fillStyle = '#223';
+            ctx.beginPath(); ctx.moveTo(0, -30); ctx.lineTo(6, 0); ctx.lineTo(-6, 0); ctx.fill();
+            // Filo brillante
+            ctx.strokeStyle = THEME.magicCyan; ctx.lineWidth = 1; 
+            ctx.beginPath(); ctx.moveTo(0, -28); ctx.lineTo(0, -5); ctx.stroke();
+            
+            ctx.restore();
+        }
+    }
+
+    class EnemySkeleton {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.w = 30; this.h = 30;
+            this.startX = x;
+            this.timer = rand(0, 100);
+            this.dir = 1;
+        }
+        update() {
+            this.timer++;
+            // Patrulla
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 100;
+        }
+        draw(ctx) {
+            let anim = Math.sin(this.timer * 0.15);
+            let y = this.y + Math.abs(anim)*2; // Bobbing
+            
+            // Huesos
+            ctx.strokeStyle = '#ccc';
+            ctx.lineWidth = 3;
+            
+            // Columna
+            ctx.beginPath(); ctx.moveTo(this.x + 15, y + 10); ctx.lineTo(this.x + 15, y + 25); ctx.stroke();
+            
+            // Costillas
+            ctx.beginPath(); ctx.moveTo(this.x + 10, y + 15); ctx.lineTo(this.x + 20, y + 15); ctx.stroke();
+            ctx.beginPath(); ctx.moveTo(this.x + 11, y + 20); ctx.lineTo(this.x + 19, y + 20); ctx.stroke();
+
+            // Craneo
+            ctx.fillStyle = '#ddd';
+            ctx.beginPath(); ctx.arc(this.x + 15, y + 5, 7, 0, Math.PI*2); ctx.fill();
+            
+            // Ojos rojos
+            ctx.fillStyle = '#f00';
+            ctx.fillRect(this.x + 13, y + 3, 2, 2);
+            ctx.fillRect(this.x + 17, y + 3, 2, 2);
+
+            // Armadura (Hombreras rojas)
+            ctx.fillStyle = '#522';
+            ctx.fillRect(this.x + 5, y + 8, 6, 6);
+            ctx.fillRect(this.x + 19, y + 8, 6, 6);
+
+            // Espada/Hacha oxidada
+            ctx.save();
+            ctx.translate(this.x + 25, y + 15);
+            ctx.rotate(anim * 0.5);
+            ctx.fillStyle = '#544';
+            ctx.fillRect(0, -15, 4, 25); // Mango
+            ctx.fillStyle = '#777';
+            ctx.beginPath(); ctx.moveTo(0, -15); ctx.lineTo(10, -10); ctx.lineTo(0, -5); ctx.fill(); // Hoja
+            ctx.restore();
+        }
+    }
+
+    class FloatingEye {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.timer = rand(0, 100);
+        }
+        update() {
+            this.timer++;
+            this.y = this.y + Math.sin(this.timer * 0.05) * 1;
+        }
+        draw(ctx) {
+            // Tentaculos colgando
+            ctx.strokeStyle = '#522';
+            ctx.lineWidth = 2;
+            for(let i=0; i<3; i++) {
+                ctx.beginPath();
+                ctx.moveTo(this.x + 15 + (i*5 - 5), this.y + 15);
+                ctx.quadraticCurveTo(
+                    this.x + 15 + Math.sin(this.timer*0.1 + i)*10, 
+                    this.y + 25 + Math.cos(this.timer*0.1)*5, 
+                    this.x + 15 + (i*5 - 5), 
+                    this.y + 35
+                );
+                ctx.stroke();
+            }
+
+            // Cuerpo Ojo
+            let size = 15 + Math.sin(this.timer * 0.2) * 1; // Palpitar
+            
+            // Glow
+            let g = ctx.createRadialGradient(this.x + 15, this.y + 10, 5, this.x + 15, this.y + 10, 25);
+            g.addColorStop(0, 'rgba(255, 50, 50, 0.8)');
+            g.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = g;
+            ctx.beginPath(); ctx.arc(this.x + 15, this.y + 10, 30, 0, Math.PI*2); ctx.fill();
+
+            // Globo ocular
+            ctx.fillStyle = '#fff';
+            ctx.beginPath(); ctx.arc(this.x + 15, this.y + 10, size, 0, Math.PI*2); ctx.fill();
+            
+            // Iris
+            ctx.fillStyle = '#f00';
+            ctx.beginPath(); ctx.arc(this.x + 15, this.y + 10, size * 0.5, 0, Math.PI*2); ctx.fill();
+            
+            // Pupila (gato)
+            ctx.fillStyle = '#000';
+            ctx.fillRect(this.x + 13, this.y + 5, 4, 10);
+        }
+    }
+
+    // --- INSTANCIAS ---
+    const hero = new Hero(200, 500);
+    const skeleton = new EnemySkeleton(800, 450);
+    const floater = new FloatingEye(600, 200);
+
+    const platforms = [
+        { x: 0, y: 540, w: 800, h: 200 },
+        { x: 750, y: 490, w: 400, h: 230 }
+    ];
+
+    // --- DIBUJO DE ESCENARIO PROCEDURAL ---
+
+    function drawPlatform(ctx, p) {
+        // 1. Base de piedra oscura
+        ctx.fillStyle = '#110f0f';
+        ctx.fillRect(p.x, p.y, p.w, p.h);
+
+        // 2. Textura de bloques grandes
+        ctx.fillStyle = '#221a1a';
+        let blockSize = 40;
+        for(let by = p.y; by < p.y + p.h; by += blockSize) {
+            let offset = (Math.floor(by/blockSize) % 2) * 20;
+            for(let bx = p.x; bx < p.x + p.w; bx += blockSize) {
+                if (Math.random() > 0.3) {
+                    ctx.fillRect(bx + offset + 2, by + 2, blockSize - 4, blockSize - 4);
+                }
+            }
+        }
+
+        // 3. Decoración superior (Piso del castillo)
+        ctx.fillStyle = '#3a2222';
+        ctx.fillRect(p.x, p.y, p.w, 15);
+        
+        // Patrón de baldosas
+        ctx.fillStyle = '#553333';
+        for(let i=p.x; i<p.x+p.w; i+=20) ctx.fillRect(i, p.y, 10, 15);
+
+        // 4. "Sangre" o musgo rojo goteando
+        ctx.fillStyle = '#511';
+        for(let i=p.x; i<p.x+p.w; i+= rand(10, 50)) {
+            let len = rand(10, 40);
+            ctx.beginPath();
+            ctx.moveTo(i, p.y + 15);
+            ctx.lineTo(i + 2, p.y + 15 + len);
+            ctx.lineTo(i - 2, p.y + 15 + len);
+            ctx.fill();
+        }
+    }
+
+    function drawBackground(ctx, camX, camY) {
+        // Cielo degradado (Atardecer sangriento)
+        let grad = ctx.createLinearGradient(0, 0, 0, HEIGHT);
+        grad.addColorStop(0, THEME.skyTop);
+        grad.addColorStop(0.6, THEME.skyBottom);
+        grad.addColorStop(1, '#000');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0,0, WIDTH, HEIGHT);
+
+        // Luna gigante
+        ctx.fillStyle = '#aa4444';
+        ctx.shadowColor = '#ff2222'; ctx.shadowBlur = 40;
+        ctx.beginPath(); ctx.arc(WIDTH - 200 - (camX * 0.02), 150, 60, 0, Math.PI*2); ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // --- SISTEMA DE CAPAS PARALLAX ---
+        const layers = [
+            // Capa 1: Montañas lejanas
+            { speed: 0.1, yBase: 400, color: '#150505', draw: (ctx, xOffset) => {
+                ctx.beginPath(); ctx.moveTo(0, 720);
+                for(let i=0; i<=WIDTH+200; i+=100) {
+                    ctx.lineTo(i, 300 - Math.abs(Math.sin(i*0.01 + xOffset*0.001)*100));
+                }
+                ctx.lineTo(WIDTH+200, 720); ctx.fill();
+            }},
+            
+            // Capa 2: Torres del castillo lejanas
+            { speed: 0.2, yBase: 200, color: '#1a0a0a', draw: (ctx, xOffset) => {
+                for(let i=0; i<WIDTH+200; i+=150) {
+                    let h = 300 + Math.sin(i*99)*100;
+                    ctx.fillRect(i, 720-h, 60, h);
+                    // Ventanas iluminadas
+                    ctx.fillStyle = '#442200';
+                    if(i%300===0) ctx.fillRect(i+20, 720-h+20, 20, 40);
+                    ctx.fillStyle = '#1a0a0a';
+                    // Techo picudo
+                    ctx.beginPath(); ctx.moveTo(i-10, 720-h); ctx.lineTo(i+30, 720-h-50); ctx.lineTo(i+70, 720-h); ctx.fill();
+                }
+            }},
+
+            // Capa 3: Arcos de acueducto
+            { speed: 0.4, yBase: 100, color: '#221111', draw: (ctx, xOffset) => {
+                for(let i=-100; i<WIDTH+200; i+=200) {
+                    ctx.fillRect(i+20, 200, 40, 520); // Pilar
+                    ctx.beginPath(); ctx.arc(i+120, 250, 80, Math.PI, 0); // Arco
+                    ctx.lineWidth = 30; ctx.strokeStyle = '#221111'; ctx.stroke();
+                }
+            }},
+
+            // Capa 4: Muro interior con estandartes
+            { speed: 0.6, yBase: 0, color: '#2a1a1a', draw: (ctx, xOffset) => {
+                for(let i=-100; i<WIDTH+200; i+=300) {
+                    ctx.fillRect(i, 0, 80, 720); // Columna gruesa
+                    
+                    // Antorcha
+                    let torchY = 400;
+                    let flicker = Math.random()*5;
+                    ctx.fillStyle = '#553333'; ctx.fillRect(i+30, torchY, 20, 20); // Base
+                    
+                    // Fuego
+                    ctx.fillStyle = THEME.accentGold;
+                    ctx.globalAlpha = 0.6;
+                    ctx.beginPath(); ctx.arc(i+40, torchY - 5, 20 + flicker, 0, Math.PI*2); ctx.fill();
+                    ctx.globalAlpha = 1.0;
+                    ctx.fillStyle = '#2a1a1a'; // Reset
+
+                    // Estandarte colgando
+                    if (Math.random() > 0.5) {
+                        ctx.fillStyle = '#511';
+                        ctx.fillRect(i+20, 100, 40, 150);
+                        ctx.beginPath(); ctx.moveTo(i+20, 250); ctx.lineTo(i+40, 280); ctx.lineTo(i+60, 250); ctx.fill();
+                        // Simbolo
+                        ctx.fillStyle = '#861'; ctx.beginPath(); ctx.arc(i+40, 160, 10, 0, Math.PI*2); ctx.fill();
+                        ctx.fillStyle = '#2a1a1a'; // Reset
+                    }
+                }
+            }}
+        ];
+
+        layers.forEach(layer => {
+            ctx.save();
+            let shift = (camX * layer.speed) % 1000;
+            ctx.translate(-shift, 0);
+            
+            // Dibujar x3 para cubrir scroll
+            for(let k=-1; k<=2; k++) {
+                ctx.save();
+                ctx.translate(k * 1000, 0);
+                ctx.fillStyle = layer.color;
+                layer.draw(ctx, k*1000);
+                ctx.restore();
+            }
+            ctx.restore();
+        });
+    }
+
+    function drawForeground(ctx, camX) {
+        // Capa Frontal: Rejas y cadenas borrosas
+        let speed = 1.2;
+        let shift = (camX * speed) % 1500;
+        
+        ctx.save();
+        ctx.translate(-shift, 0);
+        ctx.filter = 'blur(6px)';
+        ctx.fillStyle = '#050000';
+        
+        for(let k=-1; k<=1; k++) {
+            ctx.save();
+            ctx.translate(k*1500, 0);
+            
+            // Gran arco oscuro
+            ctx.beginPath();
+            ctx.moveTo(0,0); ctx.lineTo(300, 0); ctx.lineTo(300, 720); ctx.lineTo(0, 720); ctx.fill();
+            
+            // Cadenas colgantes
+            for(let c=400; c<1200; c+= 150) {
+                ctx.fillRect(c, -50, 15, rand(300, 600));
+            }
+            ctx.restore();
+        }
+        
+        ctx.filter = 'none';
+        ctx.restore();
+    }
+
+    // --- LOOP PRINCIPAL ---
+    
+    let time = 0;
+    let cam = {x: 0, y: 0};
+
+    function loop() {
+        time++;
+        
+        // --- LOGICA ---
+        // Cámara sinusoidal lenta
+        cam.x = 500 + Math.sin(time * 0.008) * 400;
+
+        hero.update();
+        skeleton.update();
+        floater.update();
+
+        // Generar partículas ambientales
+        if(time % 5 === 0) particles.push(new Particle(rand(0, WIDTH), HEIGHT, 'ember'));
+        if(time % 2 === 0) particles.push(new Particle(rand(0, WIDTH), 0, 'ash'));
+        
+        particles.forEach((p, i) => {
+            p.update();
+            if(p.life <= 0) particles.splice(i, 1);
+        });
+
+        // --- RENDER ---
+        ctx.clearRect(0,0,WIDTH,HEIGHT);
+        
+        // 1. Fondo
+        drawBackground(ctx, cam.x, cam.y);
+
+        // 2. Capa de Juego
+        // Truco de cámara: movemos el "mundo" relativo al centro
+        let worldX = -cam.x + WIDTH/2; 
+        
+        ctx.save();
+        ctx.translate(worldX, 0);
+
+        // Plataformas
+        platforms.forEach(p => drawPlatform(ctx, p));
+
+        // Entidades (Para la demo, las movemos con la cámara un poco para que no desaparezcan)
+        // En un juego real, tendrían coordenadas absolutas worldX.
+        // Aquí "engañamos" un poco sus coordenadas X para el loop visual infinito.
+        
+        let demoOffset = cam.x - 500; // Offset relativo al centro inicial
+        
+        ctx.save();
+        ctx.translate(demoOffset, 0); // Mantener entidades en pantalla
+        
+            hero.draw(ctx);
+            skeleton.draw(ctx);
+            floater.draw(ctx);
+            
+            // Partículas locales
+            // (En este caso las dibujamos en screen space para simplificar el efecto de ambiente, 
+            // pero si hubiera explosiones serían aquí)
+            
+        ctx.restore();
+        
+        ctx.restore();
+
+        // 3. Partículas Screen-Space (Cenizas frente a todo)
+        particles.forEach(p => p.draw(ctx));
+
+        // 4. Foreground
+        drawForeground(ctx, cam.x);
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>

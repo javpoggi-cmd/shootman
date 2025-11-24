@@ -1,0 +1,545 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Shootman: Mountain Level Design</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050505;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        #game-container {
+            position: relative;
+            box-shadow: 0 0 50px rgba(255, 100, 0, 0.2);
+            border: 4px solid #1a1a1a;
+            background: #000;
+            width: 1280px;
+            height: 720px;
+        }
+        canvas {
+            display: block;
+            background-color: #221a29; /* Color base por si falla el render */
+            image-rendering: pixelated; /* Mantiene el estilo retro en sprites */
+            width: 100%;
+            height: 100%;
+        }
+        /* Scanlines más sutiles para este estilo orgánico */
+        #scanlines {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%);
+            background-size: 100% 4px;
+            pointer-events: none;
+            z-index: 100;
+            opacity: 0.4;
+        }
+        /* Viñeta para atmósfera */
+        #vignette {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, rgba(0,0,0,0) 60%, rgba(50,20,0,0.6) 100%);
+            pointer-events: none;
+            z-index: 99;
+        }
+        #debug-ui {
+            position: absolute; top: 10px; left: 10px; color: #ffccaa; z-index: 101;
+            background: rgba(0,0,0,0.6); padding: 15px;
+            border-left: 4px solid #ff6600;
+            backdrop-filter: blur(4px);
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas"></canvas>
+    <div id="scanlines"></div>
+    <div id="vignette"></div>
+    <div id="debug-ui">
+        <h3>DISEÑO DE NIVEL 2</h3>
+        <p>Bioma: SIERRA DEL ATARDECER</p>
+        <p>Capas Parallax: 5 + Foreground</p>
+        <p>Efectos: Viento, Partículas, Bloom</p>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d', { alpha: false }); // Optimización
+    const GAME_WIDTH = 1280; 
+    const GAME_HEIGHT = 720;
+    canvas.width = GAME_WIDTH; 
+    canvas.height = GAME_HEIGHT;
+
+    // --- PALETA DE COLORES (ATARDECER) ---
+    const PALETTE = {
+        skyTop: '#2d1b4e',       // Morado oscuro
+        skyBottom: '#d94e1f',    // Naranja intenso
+        sun: '#ffaa00',          // Sol dorado
+        mountainFar: '#422',     // Silueta lejana
+        mountainMid: '#582a30',  // Montaña media
+        forest: '#1e2618',       // Bosque oscuro fondo
+        groundTop: '#5d7e38',    // Pasto iluminado
+        groundBody: '#3b2922',   // Tierra oscura
+        stone: '#555055'         // Piedras
+    };
+
+    // Colores de entidades ajustados para la iluminación
+    const COLORS = { 
+        player: '#e0e0e0', 
+        playerAccent: '#ffaa00', 
+        bullet: '#ffeb3b', 
+        enemyBullet: '#ff4444', 
+        weapon: '#88cc88' 
+    };
+
+    // --- UTILIDADES DE DIBUJO ---
+    // Ruido simple para texturas
+    function noise(x, y) {
+        return Math.sin(x * 12.9898 + y * 78.233) * 43758.5453 % 1;
+    }
+
+    // --- CLASES DE OBJETOS (Mantiene lógica original, mejora visuales) ---
+
+    class MockPlayer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 24; this.height = 40;
+            this.vx = 0; 
+            this.animTimer = 0;
+            this.facingRight = true;
+            this.state = 'wait'; 
+            this.stateTimer = 0;
+        }
+
+        update() {
+            this.animTimer++;
+            this.stateTimer++;
+            // IA Simple (Mantenida del original)
+            if (this.state === 'wait') {
+                this.vx = 0;
+                if (this.stateTimer > 60) { 
+                    this.state = Math.random() > 0.5 ? 'walk_right' : 'walk_left';
+                    this.stateTimer = 0;
+                }
+            } else if (this.state === 'walk_right') {
+                this.vx = 3;
+                this.facingRight = true;
+                this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            } else if (this.state === 'walk_left') {
+                this.vx = -3;
+                this.facingRight = false;
+                this.x += this.vx;
+                if (this.stateTimer > 120) { this.state = 'wait'; this.stateTimer = 0; }
+            }
+            // Limites
+            if(this.x < 100) { this.x = 100; this.state = 'walk_right'; }
+            if(this.x > 600) { this.x = 600; this.state = 'walk_left'; }
+        }
+
+        draw(ctx) {
+            ctx.save(); 
+            // Sombra simple
+            ctx.fillStyle = 'rgba(0,0,0,0.5)';
+            ctx.beginPath(); ctx.ellipse(this.x + 12, this.y + 38, 10, 3, 0, 0, Math.PI*2); ctx.fill();
+
+            ctx.fillStyle = COLORS.player;
+            let lean = 0; if (Math.abs(this.vx) > 1) lean = this.facingRight ? 3 : -3; 
+            ctx.translate(lean, 0);
+            
+            // Piernas
+            if (Math.abs(this.vx) > 0.5) {
+                let cycle = Math.sin(this.animTimer * 0.5);
+                ctx.fillStyle = '#bbb';
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15 + cycle * 3); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15 - cycle * 3);
+            } else { 
+                ctx.fillStyle = '#bbb';
+                ctx.fillRect(this.x + 4, this.y + 25, 6, 15); 
+                ctx.fillRect(this.x + 14, this.y + 25, 6, 15); 
+            }
+            
+            // Cuerpo y Cabeza (Con tinte atardecer)
+            ctx.fillStyle = '#fff0e0'; ctx.fillRect(this.x, this.y + 10, this.width, 18);
+            ctx.fillStyle = '#d95'; ctx.fillRect(this.facingRight ? this.x - 4 : this.x + 20, this.y + 12, 4, 10); // Mochila
+            ctx.fillStyle = '#222'; ctx.fillRect(this.x + 2, this.y, 20, 12); // Casco
+            ctx.fillStyle = COLORS.playerAccent; ctx.fillRect(this.facingRight ? this.x + 12 : this.x + 2, this.y + 3, 10, 4); // Visor Glow
+
+            // Arma
+            ctx.fillStyle = '#333';
+            let gunX = this.facingRight ? this.x + 14 : this.x - 6; 
+            ctx.fillRect(gunX, this.y + 14, 16, 6);
+            ctx.restore();
+        }
+    }
+
+    class MockWalker {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.width = 30; this.height = 30;
+            this.vx = 2;
+            this.dir = 1;
+            this.timer = 0;
+            this.state = 'walk';
+            this.startX = x;
+        }
+
+        update() {
+            this.timer++;
+            if (this.state === 'walk') {
+                this.x += this.vx;
+                if (Math.abs(this.x - this.startX) > 150) {
+                    this.state = 'wait';
+                    this.waitTimer = 60;
+                }
+            } else if (this.state === 'wait') {
+                this.waitTimer--;
+                if (this.waitTimer <= 0) {
+                    this.dir *= -1;
+                    this.vx = this.dir * 2;
+                    this.state = 'walk';
+                }
+            }
+        }
+
+        draw(ctx) {
+            ctx.fillStyle = '#aa3333'; // Rojo oscuro
+            let anim = Math.sin(this.timer * 0.2);
+            let drawY = this.y - 10; 
+            
+            // Cuerpo mecanico rugoso
+            ctx.fillRect(this.x, drawY, this.width, this.height);
+            // Ojo brillante
+            ctx.shadowBlur = 10; ctx.shadowColor = '#f00';
+            ctx.fillStyle = '#fff'; ctx.fillRect(this.x + 10, drawY + 5, 10, 10); 
+            ctx.fillStyle = '#f00'; ctx.fillRect(this.x + 13, drawY + 8, 4, 4);
+            ctx.shadowBlur = 0;
+            
+            // Piernas
+            ctx.fillStyle = '#522'; 
+            ctx.fillRect(this.x + 5, drawY + 30, 5, 10 + anim * 5); 
+            ctx.fillRect(this.x + 20, drawY + 30, 5, 10 - anim * 5);
+        }
+    }
+
+    class MockFlyer {
+        constructor(x, y) {
+            this.x = x; this.y = y;
+            this.startX = x;
+            this.timer = 0;
+        }
+        update() {
+            this.timer++;
+            this.x = this.startX + Math.sin(this.timer * 0.02) * 200;
+            this.y += Math.cos(this.timer * 0.05) * 1; 
+        }
+        draw(ctx) {
+            let flap = Math.sin(this.timer * 0.8) * 10;
+            // Cuerpo
+            ctx.fillStyle = '#884444';
+            ctx.beginPath(); ctx.arc(this.x + 15, this.y + 10, 10, 0, Math.PI*2); ctx.fill();
+            // Alas estilo insecto
+            ctx.fillStyle = 'rgba(200, 255, 200, 0.5)'; 
+            ctx.beginPath(); ctx.moveTo(this.x + 15, this.y + 5); ctx.lineTo(this.x - 10, this.y - 10 + flap); ctx.lineTo(this.x + 15, this.y + 10); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(this.x + 15, this.y + 5); ctx.lineTo(this.x + 40, this.y - 10 + flap); ctx.lineTo(this.x + 15, this.y + 10); ctx.fill(); 
+            // Motor/Aguijon
+            ctx.fillStyle = '#ffaa00'; ctx.fillRect(this.x + 12, this.y + 15, 6, 6);
+        }
+    }
+
+    class Particle {
+        constructor() {
+            this.reset();
+        }
+        reset() {
+            this.x = Math.random() * GAME_WIDTH;
+            this.y = Math.random() * GAME_HEIGHT;
+            this.size = Math.random() * 3 + 1;
+            this.speedX = Math.random() * 2 + 1; // Viento constante
+            this.speedY = Math.random() * 0.5 - 0.25;
+            this.alpha = Math.random() * 0.5 + 0.1;
+            this.type = Math.random() > 0.8 ? 'leaf' : 'dust';
+        }
+        update() {
+            this.x += this.speedX;
+            this.y += this.speedY;
+            if (this.type === 'leaf') {
+                this.y += 0.5;
+                this.x += Math.sin(this.y * 0.05); // Bamboleo
+            }
+            
+            if (this.x > GAME_WIDTH) this.x = -10;
+            if (this.y > GAME_HEIGHT) this.y = -10;
+        }
+        draw(ctx) {
+            ctx.globalAlpha = this.alpha;
+            if (this.type === 'leaf') {
+                ctx.fillStyle = '#dcb35c'; // Hoja seca
+                ctx.beginPath(); ctx.ellipse(this.x, this.y, this.size, this.size/2, this.y*0.1, 0, Math.PI*2); ctx.fill();
+            } else {
+                ctx.fillStyle = '#fff';
+                ctx.fillRect(this.x, this.y, this.size, this.size);
+            }
+            ctx.globalAlpha = 1.0;
+        }
+    }
+
+    // --- SETUP DEL JUEGO ---
+    const player = new MockPlayer(200, 500);
+    const walker = new MockWalker(800, 450);
+    const flyer = new MockFlyer(600, 200);
+    
+    // Sistema de partículas
+    const particles = Array.from({ length: 50 }, () => new Particle());
+
+    // Plataformas más naturales (Escalonadas)
+    const platforms = [
+        { x: -100, y: 580, width: 900, height: 200, type: 'main' }, // Suelo base
+        { x: 850, y: 520, width: 500, height: 300, type: 'hill' },  // Colina derecha
+        { x: 750, y: 490, width: 200, height: 20, type: 'floating' }, // Flotante
+        { x: 300, y: 400, width: 150, height: 20, type: 'floating' }  // Flotante alta
+    ];
+
+    let gameTime = 0;
+    let camera = { x: 0, y: 0 };
+
+    // --- GENERADORES DE FONDO ---
+
+    function drawSky(ctx) {
+        // Gradiente complejo de atardecer
+        let gradient = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        gradient.addColorStop(0, PALETTE.skyTop);
+        gradient.addColorStop(0.6, PALETTE.skyBottom);
+        gradient.addColorStop(1, '#ffccaa');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+        // Sol
+        ctx.save();
+        ctx.shadowBlur = 50;
+        ctx.shadowColor = '#ffaa00';
+        ctx.fillStyle = PALETTE.sun;
+        ctx.beginPath();
+        // El sol se mueve muy poco con parallax (0.01)
+        ctx.arc(GAME_WIDTH * 0.7, GAME_HEIGHT * 0.3, 60, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    }
+
+    function drawMountainLayer(ctx, offset, color, heightMod, jaggedness, speed) {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(0, GAME_HEIGHT);
+        
+        // Generación procedural de montañas
+        for (let i = 0; i <= GAME_WIDTH; i += 10) {
+            // La X depende del parallax para crear la ilusión de movimiento
+            let worldX = i + (offset * speed); 
+            // Usamos senos combinados para formas orgánicas
+            let y = GAME_HEIGHT - heightMod 
+                    - Math.sin(worldX * 0.005) * 50 
+                    - Math.sin(worldX * 0.02) * 20 
+                    + (noise(worldX * jaggedness, 0) * 30); 
+            
+            ctx.lineTo(i, y);
+        }
+        ctx.lineTo(GAME_WIDTH, GAME_HEIGHT);
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    function drawForestLayer(ctx, offset, color, heightMod, speed) {
+        ctx.fillStyle = color;
+        // Dibujamos muchos "árboles" simples
+        let spacing = 30;
+        let width = GAME_WIDTH + 100;
+        let startX = -(offset * speed) % spacing; // Offset cíclico
+
+        for (let i = -spacing; i < width; i += spacing) {
+            let x = i + startX;
+            // Pseudo-aleatoriedad basada en la posición fija del mundo
+            let worldIndex = Math.floor((offset * speed + i) / spacing);
+            let treeHeight = 40 + Math.sin(worldIndex * 321.3) * 20 + heightMod;
+            
+            if (treeHeight > 0) {
+                ctx.beginPath();
+                ctx.moveTo(x, GAME_HEIGHT);
+                ctx.lineTo(x + spacing/2, GAME_HEIGHT - treeHeight);
+                ctx.lineTo(x + spacing, GAME_HEIGHT);
+                ctx.fill();
+            }
+        }
+        // Base sólida del bosque
+        ctx.fillRect(0, GAME_HEIGHT - 50, GAME_WIDTH, 50);
+    }
+
+    function drawBackground(ctx, cameraX) {
+        drawSky(ctx);
+
+        // Capa 1: Montañas muy lejanas (Lento)
+        drawMountainLayer(ctx, cameraX, 'rgba(60, 30, 50, 0.8)', 200, 0.01, 0.1);
+        
+        // Capa 2: Montañas medias
+        drawMountainLayer(ctx, cameraX, PALETTE.mountainMid, 150, 0.05, 0.2);
+        
+        // Niebla entre capas
+        let fogGrad = ctx.createLinearGradient(0, GAME_HEIGHT/2, 0, GAME_HEIGHT);
+        fogGrad.addColorStop(0, 'rgba(255, 200, 150, 0)');
+        fogGrad.addColorStop(1, 'rgba(255, 200, 150, 0.2)');
+        ctx.fillStyle = fogGrad;
+        ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+        // Capa 3: Silueta Bosque Lejano
+        drawForestLayer(ctx, cameraX, '#2e1a1a', 100, 0.4);
+
+        // Capa 4: Bosque Cercano (Más detalle)
+        drawForestLayer(ctx, cameraX, '#1a1212', 150, 0.6);
+    }
+
+    // --- DIBUJO DEL MAPA (TIERRA Y PASTO) ---
+    function drawPlatforms(ctx) {
+        platforms.forEach(p => {
+            // Sombra de plataforma
+            ctx.fillStyle = 'rgba(0,0,0,0.3)';
+            ctx.fillRect(p.x + 10, p.y + 10, p.width, p.height);
+
+            // Cuerpo de tierra
+            ctx.fillStyle = PALETTE.groundBody;
+            ctx.fillRect(p.x, p.y, p.width, p.height);
+
+            // Textura de tierra (Puntos y piedras)
+            ctx.fillStyle = '#2a1d18';
+            for(let i=0; i<p.width; i+=20) {
+                for(let j=20; j<Math.min(p.height, 100); j+=20) {
+                    if (Math.random() > 0.5) ctx.fillRect(p.x + i + Math.random()*10, p.y + j + Math.random()*10, 4, 4);
+                }
+            }
+
+            // Parte superior (Césped)
+            ctx.fillStyle = PALETTE.groundTop;
+            ctx.fillRect(p.x, p.y, p.width, 15);
+            
+            // Detalle de pasto (Bordes irregulares)
+            ctx.beginPath();
+            for (let i = 0; i < p.width; i+=5) {
+                ctx.moveTo(p.x + i, p.y);
+                ctx.lineTo(p.x + i + 2, p.y - 5 - Math.random() * 5); // Hojas hacia arriba
+                ctx.lineTo(p.x + i + 4, p.y);
+            }
+            ctx.fill();
+
+            // Decoración extra: Piedras o flores
+            if (p.width > 100) {
+                ctx.fillStyle = '#888';
+                ctx.beginPath();
+                ctx.arc(p.x + 50, p.y - 2, 5, 0, Math.PI, true); // Piedra pequeña
+                ctx.fill();
+            }
+        });
+    }
+
+    // --- CAPA FRONTAL (FOREGROUND) ---
+    function drawForeground(ctx, cameraX) {
+        // Esta capa se mueve más rápido que todo para efecto profundidad
+        let speed = 1.2; 
+        let offset = -(cameraX * speed) % 1000;
+        
+        // Aplicar desenfoque
+        ctx.filter = 'blur(4px)';
+        ctx.fillStyle = '#0a0500';
+
+        // Dibujar siluetas grandes de arbustos pasando
+        for (let i = -200; i < GAME_WIDTH + 200; i+= 400) {
+            let x = i + offset;
+            // Forma de arbusto aleatoria
+            ctx.beginPath();
+            ctx.arc(x, GAME_HEIGHT + 50, 100, 0, Math.PI*2);
+            ctx.arc(x + 80, GAME_HEIGHT + 20, 120, 0, Math.PI*2);
+            ctx.arc(x - 60, GAME_HEIGHT + 40, 90, 0, Math.PI*2);
+            ctx.fill();
+        }
+        
+        ctx.filter = 'none'; // Reset filter
+    }
+
+    function drawParticles(ctx) {
+        particles.forEach(p => p.draw(ctx));
+    }
+
+    // --- BUCLE PRINCIPAL ---
+    function loop() {
+        gameTime++;
+        
+        // Movimiento de cámara automático para demo
+        camera.x += 1.5; // Scroll continuo lento hacia la derecha
+
+        // Actualizar lógica
+        player.update();
+        walker.update();
+        flyer.update();
+        particles.forEach(p => p.update());
+
+        // Limpiar
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // 1. DIBUJAR FONDO (Parallax)
+        drawBackground(ctx, camera.x);
+        
+        // 2. MUNDO DE JUEGO
+        ctx.save();
+        // En este demo, hacemos scroll infinito visual reseteando el contexto si se mueven las plataformas
+        // Pero para mantenerlo simple y fiel al anterior, moveremos el "mundo" y el jugador se mueve con él relativamente
+        
+        // TRUCO VISUAL: Centrar cámara en un punto pero el fondo se mueve
+        // Para este test, vamos a dejar las plataformas fijas visualmente en pantalla pero animar el fondo rápido
+        // y hacer que las particulas se muevan.
+        
+        // Sin embargo, para el efecto de montañas solicitado, es mejor si las plataformas se mueven o el fondo se mueve.
+        // Usaremos el método del archivo original: camara simulada.
+        
+        let visualCameraX = Math.sin(gameTime * 0.005) * 400 + 200; 
+        
+        // Re-dibujamos fondo con la cámara oscilante para ver el parallax
+        drawBackground(ctx, visualCameraX);
+
+        // Área de Juego
+        ctx.translate(-visualCameraX + 200, 0);
+
+        // Partículas traseras
+        drawParticles(ctx);
+
+        // Plataformas
+        drawPlatforms(ctx);
+        
+        // Entidades (Dibujadas en su posición real + ajuste de cámara)
+        // Truco para que los personajes no se salgan de pantalla en la demo:
+        // Los dibujamos relativos a su posición real en el mundo.
+        ctx.save();
+        // Restauramos transform para dibujar HUD o elementos fijos si fuera necesario, 
+        // pero aquí seguimos en coordenadas de mundo.
+        player.draw(ctx);
+        walker.draw(ctx);
+        flyer.draw(ctx);
+        ctx.restore();
+
+        ctx.restore();
+
+        // 3. CAPA FRONTAL (Delante de todo)
+        drawForeground(ctx, visualCameraX);
+
+        requestAnimationFrame(loop);
+    }
+
+    loop();
+
+</script>
+</body>
+</html>
